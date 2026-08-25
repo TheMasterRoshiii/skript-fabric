@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "skript",
+  "version": "${version}",
+  "name": "skript",
+  "description": "A scripting language for Minecraft servers, ported to Fabric.",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/skript/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "dev.me.master.skript.Skript"
+    ]
+  },
+  "mixins": [
+    "skript.mixins.json"
+  ],
+  "accessWidener": "skript.accesswidener",
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
