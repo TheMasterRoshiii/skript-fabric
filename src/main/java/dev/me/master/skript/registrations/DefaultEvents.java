@@ -10,6 +10,8 @@ import dev.me.master.skript.types.ItemType;
 import dev.me.master.skript.util.SkriptLogger;
 import java.util.Locale;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.minecraft.block.Block;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
@@ -68,12 +70,12 @@ public final class DefaultEvents {
 	}
 
 	private static String group(String eventName, String groupName) {
-		java.util.regex.Matcher matcher = OF_PATTERN.matcher(eventName.toLowerCase(Locale.ROOT));
+		Matcher matcher = OF_PATTERN.matcher(eventName.toLowerCase(Locale.ROOT));
 		return matcher.find() ? matcher.group(groupName) : null;
 	}
 
-	private static final java.util.regex.Pattern OF_PATTERN =
-			java.util.regex.Pattern.compile(".*\\bof (?<" + "of" + ">.+)$");
+	private static final Pattern OF_PATTERN =
+			Pattern.compile(".*\\bof (?<" + "of" + ">.+)$");
 
 	private static Predicate<ScriptEvent> noFilter() {
 		return event -> true;

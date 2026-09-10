@@ -38,8 +38,8 @@ public final class Trigger {
 		try {
 			executor.runAll();
 		} catch (DelaySignal signal) {
-			Scheduler.scheduleResume(executor.suspend(),
-					signal.delayTicks());
+			if (script.isEnabled())
+				Scheduler.scheduleResume(executor.suspend(), signal.delayTicks());
 		}
 	}
 }

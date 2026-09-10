@@ -44,27 +44,28 @@ public final class Parser {
 		String trimmed = source.trim();
 		if (trimmed.length() >= 2 && ((trimmed.startsWith("\"") && trimmed.endsWith("\""))
 				|| (trimmed.startsWith("'") && trimmed.endsWith("'"))))
-			return new Literal<>(unescape(trimmed.substring(1, trimmed.length() - 1)), String.class);
+			return acceptExpected(new Literal<>(unescape(trimmed.substring(1, trimmed.length() - 1)), String.class), expected);
 		Expression<?> variable = tryParseVariable(trimmed);
 		if (variable != null)
-			return variable;
+			return acceptExpected(variable, expected);
 		Expression<?> functionCall = FunctionRegistry.tryParseCall(trimmed, this);
 		if (functionCall != null)
-			return functionCall;
+			return acceptExpected(functionCall, expected);
 		if (containsTopLevelOperator(trimmed)) {
 			Expression<?> arithmetic = ArithmeticExpression.ArithmeticParser.tryParse(this, trimmed);
 			if (arithmetic != null)
-				return arithmetic;
+				return acceptExpected(arithmetic, expected);
 		}
 		for (SyntaxRegistry.ExpressionEntry entry : SyntaxRegistry.expressions()) {
 			SkriptPattern.MatchResult match = entry.pattern().match(trimmed);
 			if (match == null)
 				continue;
 			Expression<?> built = entry.factory().create(this, entry.pattern(), match);
-			if (built != null)
-				return built;
+			Expression<?> accepted = acceptExpected(built, expected);
+			if (accepted != null)
+				return accepted;
 		}
-		return parseLiteral(trimmed, expected);
+		return acceptExpected(parseLiteral(trimmed, expected), expected);
 	}
 
 	public VariableExpression parseVariable(String source) {
@@ -96,6 +97,14 @@ public final class Parser {
 		if (trimmed.length() >= 2 && ((trimmed.startsWith("\"") && trimmed.endsWith("\""))
 				|| (trimmed.startsWith("'") && trimmed.endsWith("'"))))
 			return new Literal<>(unescape(trimmed.substring(1, trimmed.length() - 1)), String.class);
+		if (expected != Object.class) {
+			ClassInfo<?> info = Classes.byClass(expected);
+			if (info != null) {
+				Object typed = info.parse(trimmed);
+				if (typed != null)
+					return new Literal<>(castTo(info, typed), info.type());
+			}
+		}
 		Number number = tryParseNumber(trimmed);
 		if (number != null)
 			return new Literal<>(number, Number.class);
@@ -105,20 +114,18 @@ public final class Parser {
 		TimeSpanLiteral timeSpan = TimeSpanLiteral.tryParse(trimmed);
 		if (timeSpan != null)
 			return timeSpan;
-		if (expected != Object.class) {
-			ClassInfo<?> info = Classes.byClass(expected);
-			if (info != null) {
-				Object typed = info.parse(trimmed);
-				if (typed != null)
-					return new Literal<>(castTo(info, typed), expected);
-			}
-		}
 		for (ClassInfo<?> info : Classes.parseOrder()) {
 			Object parsed = info.parse(trimmed);
 			if (parsed != null)
 				return new Literal<>(parsed, info.type());
 		}
 		return null;
+	}
+
+	private static @Nullable Expression<?> acceptExpected(@Nullable Expression<?> expression, Class<?> expected) {
+		if (expression == null || expected == Object.class || expression.returnType() == Object.class)
+			return expression;
+		return expected.isAssignableFrom(expression.returnType()) ? expression : null;
 	}
 
 	@SuppressWarnings("unchecked")

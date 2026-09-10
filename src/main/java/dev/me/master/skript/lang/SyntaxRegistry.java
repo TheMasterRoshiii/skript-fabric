@@ -2,6 +2,7 @@ package dev.me.master.skript.lang;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ToIntFunction;
 
 public final class SyntaxRegistry {
 
@@ -12,7 +13,7 @@ public final class SyntaxRegistry {
 	private static List<EffectEntry> frozenEffects;
 	private static List<ConditionEntry> frozenConditions;
 
-	public record ExpressionEntry(SkriptPattern pattern, ExpressionFactory factory) {
+	public record ExpressionEntry(int priority, SkriptPattern pattern, ExpressionFactory factory) {
 	}
 
 	@FunctionalInterface
@@ -20,7 +21,7 @@ public final class SyntaxRegistry {
 		Expression<?> create(Parser parser, SkriptPattern pattern, SkriptPattern.MatchResult match);
 	}
 
-	public record EffectEntry(SkriptPattern pattern, EffectFactory factory) {
+	public record EffectEntry(int priority, SkriptPattern pattern, EffectFactory factory) {
 	}
 
 	@FunctionalInterface
@@ -28,7 +29,7 @@ public final class SyntaxRegistry {
 		TriggerItem.Statement create(int line, Parser parser, SkriptPattern pattern, SkriptPattern.MatchResult match);
 	}
 
-	public record ConditionEntry(SkriptPattern pattern, ConditionFactory factory) {
+	public record ConditionEntry(int priority, SkriptPattern pattern, ConditionFactory factory) {
 	}
 
 	@FunctionalInterface
@@ -41,27 +42,27 @@ public final class SyntaxRegistry {
 
 	public static void registerExpression(int priority, String pattern, ExpressionFactory factory) {
 		requireUnfrozen();
-		EXPRESSIONS.add(new ExpressionEntry(SkriptPattern.compile(pattern), factory));
+		EXPRESSIONS.add(new ExpressionEntry(priority, SkriptPattern.compile(pattern), factory));
 	}
 
 	public static void registerEffect(int priority, String[] patterns, EffectFactory factory) {
 		requireUnfrozen();
 		for (String pattern : patterns)
-			EFFECTS.add(new EffectEntry(SkriptPattern.compile(pattern), factory));
+			EFFECTS.add(new EffectEntry(priority, SkriptPattern.compile(pattern), factory));
 	}
 
 	public static void registerCondition(int priority, String[] patterns, ConditionFactory factory) {
 		requireUnfrozen();
 		for (String pattern : patterns)
-			CONDITIONS.add(new ConditionEntry(SkriptPattern.compile(pattern), factory));
+			CONDITIONS.add(new ConditionEntry(priority, SkriptPattern.compile(pattern), factory));
 	}
 
 	public static void freeze() {
 		if (frozenExpressions != null)
 			throw new AssertionError("SyntaxRegistry frozen twice");
-		frozenExpressions = List.copyOf(EXPRESSIONS);
-		frozenEffects = List.copyOf(EFFECTS);
-		frozenConditions = List.copyOf(CONDITIONS);
+		frozenExpressions = sorted(EXPRESSIONS, ExpressionEntry::priority);
+		frozenEffects = sorted(EFFECTS, EffectEntry::priority);
+		frozenConditions = sorted(CONDITIONS, ConditionEntry::priority);
 	}
 
 	private static void requireUnfrozen() {
@@ -87,5 +88,11 @@ public final class SyntaxRegistry {
 	private static void requireFrozen(List<?> frozen) {
 		if (frozen == null)
 			throw new AssertionError("SyntaxRegistry accessed before freeze()");
+	}
+
+	private static <T> List<T> sorted(List<T> entries, ToIntFunction<T> priority) {
+		List<T> result = new ArrayList<>(entries);
+		result.sort((left, right) -> Integer.compare(priority.applyAsInt(right), priority.applyAsInt(left)));
+		return List.copyOf(result);
 	}
 }

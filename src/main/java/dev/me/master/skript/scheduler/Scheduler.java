@@ -1,6 +1,8 @@
 package dev.me.master.skript.scheduler;
+import dev.me.master.skript.config.SkriptConfig;
 import dev.me.master.skript.lang.Continuation;
 import dev.me.master.skript.util.SkriptLogger;
+import dev.me.master.skript.script.SkriptScript;
 import java.util.PriorityQueue;
 import java.util.function.LongSupplier;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -10,6 +12,7 @@ import net.minecraft.server.MinecraftServer;
 public final class Scheduler {
 
 	private static final PriorityQueue<Task> QUEUE = new PriorityQueue<>();
+	private static final int MAX_RESUMES_PER_TICK = SkriptConfig.INSTANCE.maxScheduledResumesPerTick;
 	private static volatile LongSupplier currentTickSupplier = () -> 0L;
 
 	private record Task(long atTick, Continuation continuation) implements Comparable<Task> {
@@ -32,6 +35,10 @@ public final class Scheduler {
 		QUEUE.clear();
 	}
 
+	public static void cancelScript(SkriptScript script) {
+		QUEUE.removeIf(task -> task.continuation().belongsTo(script));
+	}
+
 	public static void attach(MinecraftServer server) {
 		currentTickSupplier = server::getTicks;
 	}
@@ -51,9 +58,15 @@ public final class Scheduler {
 		if (QUEUE.isEmpty())
 			return;
 		long now = currentTickSupplier.getAsLong();
-		while (!QUEUE.isEmpty() && QUEUE.peek().atTick <= now) {
+		int resumed = 0;
+		while (resumed < MAX_RESUMES_PER_TICK && !QUEUE.isEmpty() && QUEUE.peek().atTick <= now) {
 			Task task = QUEUE.poll();
-			task.continuation().resume();
+			resumed++;
+			try {
+				task.continuation().resume();
+			} catch (RuntimeException e) {
+				SkriptLogger.error("Error resuming delayed trigger", e);
+			}
 		}
 	}
 }

@@ -17,13 +17,18 @@ public final class SkriptConfig {
 	public final Path scriptsDir;
 	public final Path variablesFile;
 	public final int variableSaveIntervalTicks;
+	public final int maxScheduledResumesPerTick;
+	public final int maxSpawnCount;
 	public final boolean verboseErrors;
 
-	private SkriptConfig(Path baseDir, Path scriptsDir, Path variablesFile, int variableSaveIntervalTicks, boolean verboseErrors) {
+	private SkriptConfig(Path baseDir, Path scriptsDir, Path variablesFile, int variableSaveIntervalTicks,
+			int maxScheduledResumesPerTick, int maxSpawnCount, boolean verboseErrors) {
 		this.baseDir = baseDir;
 		this.scriptsDir = scriptsDir;
 		this.variablesFile = variablesFile;
 		this.variableSaveIntervalTicks = variableSaveIntervalTicks;
+		this.maxScheduledResumesPerTick = maxScheduledResumesPerTick;
+		this.maxSpawnCount = maxSpawnCount;
 		this.verboseErrors = verboseErrors;
 	}
 
@@ -41,14 +46,17 @@ public final class SkriptConfig {
 		Path scriptsDir = baseDir.resolve(get(properties, "scripts.folder", "scripts"));
 		Path variablesFile = baseDir.resolve(get(properties, "variables.file", "variables.json"));
 		int saveInterval = parsePositiveInt(properties.getProperty("variables.save-interval-seconds"), 120);
+		int maxResumes = parsePositiveInt(properties.getProperty("scheduler.max-resumes-per-tick"), 1024);
+		int maxSpawnCount = parsePositiveInt(properties.getProperty("entities.max-spawn-count"), 64);
 		boolean verbose = Boolean.parseBoolean(properties.getProperty("log.verbose", "false"));
-		return new SkriptConfig(baseDir, scriptsDir, variablesFile, saveInterval * 20, verbose);
+		return new SkriptConfig(baseDir, scriptsDir, variablesFile, saveInterval * 20, maxResumes,
+				maxSpawnCount, verbose);
 	}
 
 	private static Path resolveBaseDir() {
 		try {
 			return LoaderBridge.gameDir().resolve("skript");
-		} catch (Throwable unavailable) {
+		} catch (LinkageError | RuntimeException unavailable) {
 			return Path.of("skript");
 		}
 	}

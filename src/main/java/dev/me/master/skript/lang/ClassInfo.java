@@ -1,6 +1,7 @@
 package dev.me.master.skript.lang;
 
 import java.util.function.Function;
+import java.util.Locale;
 
 public final class ClassInfo<T> {
 
@@ -17,7 +18,7 @@ public final class ClassInfo<T> {
 	}
 
 	public static <T> ClassInfo<T> of(String name, Class<T> type, Function<String, T> parser, Function<T, String> toString) {
-		return new ClassInfo<>(name.toLowerCase(java.util.Locale.ROOT), type, parser, toString);
+		return new ClassInfo<>(name.toLowerCase(Locale.ROOT), type, parser, toString);
 	}
 
 	public String name() {

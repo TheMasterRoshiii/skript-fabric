@@ -138,7 +138,7 @@ public final class AliasIndex {
 		extras.put("notch apple", "enchanted_golden_apple");
 		extras.put("totem", "totem_of_undying");
 		extras.put("elytra", "elytra");
-		return java.util.Map.copyOf(extras);
+		return Map.copyOf(extras);
 	}
 
 	private static Map<String, String> buildEntityExtras() {
@@ -168,6 +168,6 @@ public final class AliasIndex {
 		extras.put("armor stand", "armor_stand");
 		extras.put("minecart", "minecart");
 		extras.put("boat", "boat");
-		return java.util.Map.copyOf(extras);
+		return Map.copyOf(extras);
 	}
 }

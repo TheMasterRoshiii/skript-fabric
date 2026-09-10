@@ -1,6 +1,7 @@
 package dev.me.master.skript.lang;
 
 import java.util.List;
+import java.util.Iterator;
 
 public final class LoopSection extends TriggerItem.Section {
 
@@ -19,7 +20,7 @@ public final class LoopSection extends TriggerItem.Section {
 
 	@Override
 	protected boolean shouldEnter(ExecContext context, Frame frame) {
-		java.util.Iterator<?> iterator = iterable.getValues(context).iterator();
+		Iterator<?> iterator = iterable.getValues(context).iterator();
 		if (!iterator.hasNext())
 			return false;
 		Object first = iterator.next();

@@ -1,6 +1,7 @@
 package dev.me.master.skript.loader;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.List;
 
 import dev.me.master.skript.lang.ParseState;
@@ -25,9 +26,18 @@ public final class ScriptReader {
 			String content = cleaned.substring(indent[1]).stripTrailing();
 			if (content.isEmpty())
 				continue;
-			flat.add(new Line(i + 1, indent[0], state.substituteOptions(content)));
+			flat.add(new Line(i + 1, indent[0], content));
 		}
 		return normalizeIndentation(flat);
+	}
+
+	public static List<Node> substituteOptions(List<Node> nodes, ParseState state) {
+		List<Node> substituted = new ArrayList<>(nodes.size());
+		for (Node node : nodes) {
+			Line line = (Line) node;
+			substituted.add(new Line(line.number(), line.indent(), state.substituteOptions(line.content())));
+		}
+		return substituted;
 	}
 
 	private static int[] measureIndent(String line) {
@@ -57,11 +67,11 @@ public final class ScriptReader {
 			char c = rawLine.charAt(i);
 			if (openQuote != 0) {
 				result.append(c);
-				if (c == openQuote && result.charAt(result.length() - 2) != '\\')
+				if (c == openQuote && (i == 0 || rawLine.charAt(i - 1) != '\\'))
 					openQuote = 0;
 				continue;
 			}
-			if (c == '"') {
+			if (c == '"' || c == '\'') {
 				openQuote = c;
 				result.append(c);
 				continue;
@@ -75,7 +85,7 @@ public final class ScriptReader {
 
 	private static List<Node> normalizeIndentation(List<Line> lines) {
 		List<Node> normalized = new ArrayList<>(lines.size());
-		java.util.ArrayDeque<Integer> path = new java.util.ArrayDeque<>();
+		ArrayDeque<Integer> path = new ArrayDeque<>();
 		path.push(-1);
 		for (Line line : lines) {
 			while (path.size() > 1 && line.indent <= path.peek())

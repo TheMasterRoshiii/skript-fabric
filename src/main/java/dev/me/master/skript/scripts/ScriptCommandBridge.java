@@ -1,12 +1,21 @@
 package dev.me.master.skript.scripts;
+
+import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
-import com.mojang.brigadier.tree.CommandNode;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.tree.LiteralCommandNode;
 import com.mojang.brigadier.tree.RootCommandNode;
-import dev.me.master.skript.script.SkriptScript;
 import dev.me.master.skript.command.ScriptCommand;
+import dev.me.master.skript.events.ScriptEvent;
 import dev.me.master.skript.lang.ExecContext;
+import dev.me.master.skript.mixin.CommandNodeAccessMixin;
+import dev.me.master.skript.script.SkriptScript;
 import dev.me.master.skript.types.CurrentServer;
+import dev.me.master.skript.util.SkriptLogger;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -14,13 +23,48 @@ import java.util.Locale;
 import java.util.Map;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 
 public final class ScriptCommandBridge {
 
-	private static final Map<String, Object> REGISTERED = new HashMap<>();
+	private record Registered(ScriptCommand command, LiteralCommandNode<ServerCommandSource> node) {
+	}
+
+	private record SourceView(ServerCommandSource source) implements ScriptEvent.ServerCommandSourceView {
+
+		@Override
+		public String name() {
+			return source.getName();
+		}
+
+		@Override
+		public boolean isPlayer() {
+			return source.getPlayer() != null;
+		}
+
+		@Override
+		public ServerPlayerEntity asPlayer() {
+			return source.getPlayer();
+		}
+	}
+
+	private static final Map<String, Registered> REGISTERED = new HashMap<>();
 
 	private ScriptCommandBridge() {
+	}
+
+	public static void verifyShapeAssumptions() {
+		RootCommandNode<ServerCommandSource> root = new RootCommandNode<>();
+		try {
+			CommandNodeAccessMixin access = (CommandNodeAccessMixin) (Object) root;
+			if (access.skript$getChildren() == null
+					|| access.skript$getLiterals() == null
+					|| access.skript$getArguments() == null)
+				throw new AssertionError("Brigadier CommandNode maps are unavailable");
+		} catch (ClassCastException e) {
+			throw new AssertionError("Brigadier CommandNode accessor mixin was not applied", e);
+		}
 	}
 
 	public static void syncAll(List<SkriptScript> scripts) {
@@ -28,26 +72,35 @@ public final class ScriptCommandBridge {
 		if (server == null)
 			return;
 		CommandDispatcher<ServerCommandSource> dispatcher = server.getCommandManager().getDispatcher();
+		RootCommandNode<ServerCommandSource> root = dispatcher.getRoot();
 		Map<String, ScriptCommand> wanted = new HashMap<>();
 		for (SkriptScript script : scripts) {
 			if (!script.isEnabled())
 				continue;
-			for (ScriptCommand command : script.commands())
-				wanted.put(command.name(), command);
+			for (ScriptCommand command : script.commands()) {
+				ScriptCommand previous = wanted.putIfAbsent(command.name(), command);
+				if (previous != null && previous != command)
+					SkriptLogger.warn("Cannot register duplicate script command /" + command.name()
+							+ "; keeping the first definition");
+			}
 		}
-		List<String> removed = new ArrayList<>();
-		for (String name : REGISTERED.keySet()) {
-			if (!wanted.containsKey(name))
-				removed.add(name);
+
+		boolean changed = false;
+		for (String name : new ArrayList<>(REGISTERED.keySet())) {
+			Registered registered = REGISTERED.get(name);
+			ScriptCommand desired = wanted.get(name);
+			if (desired == null || registered.command() != desired || root.getChild(name) != registered.node()) {
+				unregister(dispatcher, name);
+				changed = true;
+			}
 		}
-		for (String name : removed)
-			unregister(dispatcher, name);
 		for (Map.Entry<String, ScriptCommand> entry : wanted.entrySet()) {
-			String name = entry.getKey();
-			if (REGISTERED.containsKey(name))
-				continue;
-			register(dispatcher, name, entry.getValue());
+			if (!REGISTERED.containsKey(entry.getKey())
+					&& register(dispatcher, entry.getKey(), entry.getValue()))
+				changed = true;
 		}
+		if (changed)
+			sendCommandTrees(server);
 	}
 
 	public static void registerAllNow(CommandDispatcher<ServerCommandSource> dispatcher,
@@ -62,11 +115,38 @@ public final class ScriptCommandBridge {
 		}
 	}
 
-	private static void register(CommandDispatcher<ServerCommandSource> dispatcher, String name,
+	private static boolean register(CommandDispatcher<ServerCommandSource> dispatcher, String name,
 			ScriptCommand command) {
+		if (dispatcher.getRoot().getChild(name) != null) {
+			SkriptLogger.warn("Cannot register script command /" + name
+					+ "; another command already owns that root literal");
+			return false;
+		}
 		LiteralArgumentBuilder<ServerCommandSource> builder = LiteralArgumentBuilder.literal(name);
 		builder.requires(source -> hasPermission(source, command));
-		builder.executes(context -> {
+		appendArguments(builder, command, 0);
+		LiteralCommandNode<ServerCommandSource> node = dispatcher.register(builder);
+		REGISTERED.put(name, new Registered(command, node));
+		return true;
+	}
+
+	private static void appendArguments(ArgumentBuilder<ServerCommandSource, ?> parent,
+			ScriptCommand command, int index) {
+		if (index >= command.arguments().size()) {
+			parent.executes(executor(command));
+			return;
+		}
+		ScriptCommand.Arg argument = command.arguments().get(index);
+		RequiredArgumentBuilder<ServerCommandSource, String> child =
+				RequiredArgumentBuilder.argument(argument.name(), StringArgumentType.string());
+		if (argument.optional())
+			parent.executes(executor(command));
+		appendArguments(child, command, index + 1);
+		parent.then(child);
+	}
+
+	private static Command<ServerCommandSource> executor(ScriptCommand command) {
+		return context -> {
 			ServerCommandSource source = context.getSource();
 			if (command.isPlayerOnly() && source.getPlayer() == null) {
 				source.sendError(Text.literal("This command can only be used by players."));
@@ -76,14 +156,13 @@ public final class ScriptCommandBridge {
 				source.sendError(Text.literal("You don't have permission to use this command."));
 				return 0;
 			}
-			ExecContext execution =
-					new ExecContext(null);
-			bindArguments(execution, command, context.getInput());
+			ExecContext execution = new ExecContext(new ScriptEvent.Command(
+					withoutLeadingSlash(context.getInput()), new SourceView(source)));
+			if (!bindArguments(execution, command, context))
+				return 0;
 			command.trigger().run(execution);
 			return 1;
-		});
-		Object node = dispatcher.register(builder);
-		REGISTERED.put(name, node);
+		};
 	}
 
 	private static boolean hasPermission(ServerCommandSource source, ScriptCommand command) {
@@ -94,90 +173,55 @@ public final class ScriptCommandBridge {
 						&& source.getPlayer().getCommandTags().contains(permissionTag(command.permission()));
 	}
 
-	@SuppressWarnings("unchecked")
 	private static void unregister(CommandDispatcher<ServerCommandSource> dispatcher, String name) {
-		if (REGISTERED.remove(name) == null)
+		Registered registered = REGISTERED.remove(name);
+		if (registered == null)
 			return;
 		RootCommandNode<ServerCommandSource> root = dispatcher.getRoot();
-		removeChild(root, "children", name);
-		removeChild(root, "literals", name);
-		removeChild(root, "arguments", name);
+		if (root.getChild(name) != registered.node())
+			return;
+		CommandNodeAccessMixin access = (CommandNodeAccessMixin) (Object) root;
+		access.skript$getChildren().remove(name);
+		access.skript$getLiterals().remove(name);
+		access.skript$getArguments().remove(name);
 	}
 
-	private static void removeChild(RootCommandNode<ServerCommandSource> root, String mapField, String name) {
-		try {
-			java.lang.reflect.Field field = CommandNode.class.getDeclaredField(mapField);
-			field.setAccessible(true);
-			Object raw = field.get(root);
-			if (!(raw instanceof java.util.Map<?, ?>))
-				throw new AssertionError("CommandNode." + mapField + " is no longer a Map");
-			((java.util.Map<String, CommandNode<ServerCommandSource>>) raw).remove(name);
-		} catch (ReflectiveOperationException e) {
-			throw new AssertionError("Brigadier CommandNode." + mapField + " shape changed; "
-					+ "script command removal must be updated", e);
-		}
+	private static void sendCommandTrees(MinecraftServer server) {
+		for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList())
+			server.getPlayerManager().sendCommandTree(player);
 	}
 
 	private static String permissionTag(String permission) {
 		return "skript.perm." + permission.toLowerCase(Locale.ROOT).replace(' ', '.');
 	}
 
-	private static void bindArguments(ExecContext execution,
-			ScriptCommand command, String input) {
-		String argumentsPart = input.startsWith("/") ? input.substring(1) : input;
-		int nameEnd = argumentsPart.indexOf(' ');
-		if (nameEnd < 0)
-			return;
-		String rest = argumentsPart.substring(nameEnd + 1).trim();
-		if (rest.isEmpty())
-			return;
-		List<String> raw = splitArguments(rest);
+	private static boolean bindArguments(ExecContext execution,
+			ScriptCommand command, CommandContext<ServerCommandSource> context) {
 		int ordinal = 0;
-		int argumentCount = Math.min(command.arguments().size(), raw.size());
-		for (int i = 0; i < argumentCount; i++) {
-			ScriptCommand.Arg argument = command.arguments().get(i);
+		for (ScriptCommand.Arg argument : command.arguments()) {
+			String raw;
+			try {
+				raw = context.getArgument(argument.name(), String.class);
+			} catch (IllegalArgumentException e) {
+				if (argument.optional())
+					break;
+				context.getSource().sendError(Text.literal("Missing command argument: " + argument.name()));
+				return false;
+			}
+			Object value = resolveArgument(argument, raw);
+			if (value == null) {
+				context.getSource().sendError(Text.literal("Invalid value for command argument: " + argument.name()));
+				return false;
+			}
 			ordinal++;
-			Object value = resolveArgument(argument, raw.get(i));
 			execution.setLocal("\0arg:" + ordinal, value);
 			execution.setLocal("\0arg:" + argument.name(), value);
 		}
 		execution.setLocal("\0arg:count", ordinal);
-	}
-
-	private static List<String> splitArguments(String input) {
-		List<String> parts = new ArrayList<>();
-		StringBuilder current = new StringBuilder();
-		char openQuote = 0;
-		for (int i = 0; i < input.length(); i++) {
-			char c = input.charAt(i);
-			if (openQuote != 0) {
-				current.append(c);
-				if (c == openQuote && current.charAt(current.length() - 2) != '\\')
-					openQuote = 0;
-				continue;
-			}
-			if (c == '"') {
-				openQuote = c;
-				current.append(c);
-				continue;
-			}
-			if (Character.isWhitespace(c)) {
-				if (!current.isEmpty()) {
-					parts.add(current.toString());
-					current.setLength(0);
-				}
-				continue;
-			}
-			current.append(c);
-		}
-		if (!current.isEmpty())
-			parts.add(current.toString());
-		return parts;
+		return true;
 	}
 
 	private static Object resolveArgument(ScriptCommand.Arg argument, String rawValue) {
-		if (rawValue == null)
-			return null;
 		String cleaned = unquote(rawValue.trim());
 		return argument.type().parse(cleaned);
 	}
@@ -186,5 +230,9 @@ public final class ScriptCommandBridge {
 		if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\""))
 			return value.substring(1, value.length() - 1);
 		return value;
+	}
+
+	private static String withoutLeadingSlash(String input) {
+		return input.startsWith("/") ? input.substring(1) : input;
 	}
 }

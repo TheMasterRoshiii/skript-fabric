@@ -5,16 +5,18 @@ import java.util.List;
 
 public final class Executor {
 
+	private final Trigger trigger;
 	private final ExecContext context;
 	private final List<Frame> frames;
 
-	Executor(ExecContext context, List<Frame> frames) {
+	Executor(Trigger trigger, ExecContext context, List<Frame> frames) {
+		this.trigger = trigger;
 		this.context = context;
 		this.frames = frames;
 	}
 
 	public static Executor start(Trigger trigger, ExecContext context) {
-		Executor executor = new Executor(context, new ArrayList<>());
+		Executor executor = new Executor(trigger, context, new ArrayList<>());
 		executor.frames.add(new Frame(new RootSection(trigger)));
 		return executor;
 	}
@@ -87,7 +89,7 @@ public final class Executor {
 	}
 
 	public Continuation suspend() {
-		return new Continuation(context, frames);
+		return new Continuation(trigger, context, frames);
 	}
 
 	private static final class RootSection extends TriggerItem.Section {

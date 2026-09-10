@@ -22,6 +22,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
+import java.util.Locale;
 
 public final class DefaultTypes {
 
@@ -38,7 +39,7 @@ public final class DefaultTypes {
 						? String.valueOf(d.longValue())
 						: String.valueOf(value)));
 
-		Classes.register(ClassInfo.of("integer", Number.class, raw -> {
+			Classes.register(ClassInfo.of("integer", Long.class, raw -> {
 			try {
 				return Long.parseLong(raw);
 			} catch (NumberFormatException e) {
@@ -47,7 +48,7 @@ public final class DefaultTypes {
 		}, value -> String.valueOf(value)));
 
 		Classes.register(ClassInfo.of("boolean", Boolean.class,
-				raw -> switch (raw.toLowerCase(java.util.Locale.ROOT)) {
+				raw -> switch (raw.toLowerCase(Locale.ROOT)) {
 					case "true", "yes" -> Boolean.TRUE;
 					case "false", "no" -> Boolean.FALSE;
 					default -> null;
@@ -133,7 +134,7 @@ public final class DefaultTypes {
 			MinecraftServer server = CurrentServer.get();
 			if (server == null)
 				return null;
-			String lowered = raw.toLowerCase(java.util.Locale.ROOT).replace(' ', '_');
+			String lowered = raw.toLowerCase(Locale.ROOT).replace(' ', '_');
 			for (ServerWorld world : server.getWorlds()) {
 				String path = world.getRegistryKey().getValue().getPath();
 				if (path.equalsIgnoreCase(lowered))

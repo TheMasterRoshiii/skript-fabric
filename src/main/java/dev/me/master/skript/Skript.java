@@ -26,19 +26,30 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerInteractionManager;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.item.ItemStack;
+import net.minecraft.util.ActionResult;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.world.World;
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Skript implements ModInitializer {
 
-	private static final java.util.concurrent.atomic.AtomicBoolean BOOTED =
-			new java.util.concurrent.atomic.AtomicBoolean(false);
+	private static final AtomicBoolean BOOTED =
+			new AtomicBoolean(false);
 
 	@Override
 	public void onInitialize() {
 		bootEngine();
 		FabricEventBridge.register();
 		Scheduler.init();
+		Variables.init();
 		ServerLifecycleEvents.SERVER_STARTED.register(Skript::startSession);
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> stopSession());
+		ServerLifecycleEvents.SERVER_STOPPING.register(Skript::stopSession);
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
 				SkriptCommand.register(dispatcher));
 	}
@@ -60,20 +71,27 @@ public class Skript implements ModInitializer {
 	}
 
 	private static void verifyShapeAssumptions() {
-		boolean hasExecuteWithPrefix = false;
-		for (java.lang.reflect.Method method : CommandManager.class.getMethods()) {
-			if (!method.getName().equals("executeWithPrefix"))
-				continue;
-			Class<?>[] parameters = method.getParameterTypes();
-			hasExecuteWithPrefix = parameters.length == 2
-					&& parameters[0] == ServerCommandSource.class
-					&& parameters[1] == String.class;
-			break;
-		}
-		if (!hasExecuteWithPrefix)
+		try {
+			Method method = CommandManager.class.getDeclaredMethod(
+					"executeWithPrefix", ServerCommandSource.class, String.class);
+			if (method.getReturnType() != void.class)
+				throw new AssertionError("CommandManager.executeWithPrefix return type changed");
+		} catch (NoSuchMethodException e) {
 			throw new AssertionError(
 					"CommandManager.executeWithPrefix(ServerCommandSource, String) is missing; "
 							+ "the on-command mixin target has moved and must be updated.");
+		}
+		try {
+			Method method = ServerPlayerInteractionManager.class.getDeclaredMethod(
+					"interactBlock", ServerPlayerEntity.class, World.class, ItemStack.class,
+					Hand.class, BlockHitResult.class);
+			if (method.getReturnType() != ActionResult.class)
+				throw new AssertionError("ServerPlayerInteractionManager.interactBlock return type changed");
+		} catch (NoSuchMethodException e) {
+			throw new AssertionError(
+					"ServerPlayerInteractionManager.interactBlock target is missing; block-place hook must be updated.", e);
+		}
+		ScriptCommandBridge.verifyShapeAssumptions();
 	}
 
 	private static void startSession(MinecraftServer server) {
@@ -85,7 +103,7 @@ public class Skript implements ModInitializer {
 		SkriptLogger.info("Loaded " + loaded + " script file(s) from "
 				+ SkriptConfig.INSTANCE.scriptsDir);
 		ScriptCommandBridge.syncAll(ScriptManager.all());
-		PeriodicEvents.startSession();
+		PeriodicEvents.startSession(server);
 		fireLoadEvents();
 	}
 
@@ -96,8 +114,11 @@ public class Skript implements ModInitializer {
 		}
 	}
 
-	private static void stopSession() {
+	private static void stopSession(MinecraftServer server) {
+		ScriptCommandBridge.syncAll(List.of());
 		Variables.saveNow();
 		Scheduler.clearQueue();
+		ScriptManager.unloadAll();
+		CurrentServer.detach(server);
 	}
 }

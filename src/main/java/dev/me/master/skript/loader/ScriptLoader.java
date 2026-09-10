@@ -1,6 +1,7 @@
 package dev.me.master.skript.loader;
 import dev.me.master.skript.script.SkriptScript;
 import dev.me.master.skript.command.ScriptCommand;
+import dev.me.master.skript.events.EventDispatch;
 import dev.me.master.skript.lang.ClassInfo;
 import dev.me.master.skript.lang.Classes;
 import dev.me.master.skript.lang.Condition;
@@ -22,8 +23,10 @@ import dev.me.master.skript.lang.TimeSpanLiteral;
 import dev.me.master.skript.util.SkriptLogger;
 import dev.me.master.skript.variables.Variables;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.jetbrains.annotations.Nullable;
@@ -41,6 +44,14 @@ public final class ScriptLoader {
 
 	private final ParseState state;
 	private final Parser parser;
+	private final List<InitialVariable> initialVariables = new ArrayList<>();
+	private final List<RegisteredFunction> registeredFunctions = new ArrayList<>();
+
+	private record InitialVariable(String name, Object value) {
+	}
+
+	private record RegisteredFunction(FunctionDefinition current, @Nullable FunctionDefinition previous) {
+	}
 
 	public ScriptLoader(ParseState state) {
 		this.state = state;
@@ -49,6 +60,8 @@ public final class ScriptLoader {
 
 	public boolean load(SkriptScript script, List<String> lines) {
 		List<ScriptReader.Node> nodes = ScriptReader.read(lines, state);
+		primeOptions(nodes);
+		nodes = ScriptReader.substituteOptions(nodes, state);
 		int index = 0;
 		while (index < nodes.size()) {
 			ScriptReader.Line line = (ScriptReader.Line) nodes.get(index);
@@ -65,7 +78,23 @@ public final class ScriptLoader {
 				index += consumed;
 			}
 		}
-		return !state.hasErrors();
+		if (state.hasErrors()) {
+			rollback(script);
+			return false;
+		}
+		for (InitialVariable variable : initialVariables)
+			Variables.setIfAbsent(variable.name(), variable.value());
+		return true;
+	}
+
+	private void primeOptions(List<ScriptReader.Node> nodes) {
+		for (int i = 0; i < nodes.size(); i++) {
+			ScriptReader.Line line = (ScriptReader.Line) nodes.get(i);
+			if (line.indent() != 0 || !line.content().equalsIgnoreCase("options:"))
+				continue;
+			for (ScriptReader.Line child : collectChildren(nodes, i))
+				registerOption(child);
+		}
 	}
 
 	private int parseRootStructure(SkriptScript script, ScriptReader.Line line, List<ScriptReader.Node> nodes, int index) {
@@ -105,6 +134,12 @@ public final class ScriptLoader {
 		if (commandMatcher.matches()) {
 			ScriptCommand command = buildCommand(script, line, commandMatcher.group(1), commandMatcher.group(2), children);
 			if (command != null) {
+				for (ScriptCommand existing : script.commands()) {
+					if (existing.name().equals(command.name())) {
+						error(line, "Duplicate command: /" + command.name());
+						return -1;
+					}
+				}
 				script.addCommand(command);
 				return 1 + children.size();
 			}
@@ -115,7 +150,19 @@ public final class ScriptLoader {
 		if (functionMatcher.matches()) {
 			FunctionDefinition function = buildFunction(script, line, functionMatcher, children);
 			if (function != null) {
-				FunctionRegistry.register(function);
+				for (FunctionDefinition declared : script.functions()) {
+					if (declared.name().equals(function.name())) {
+						error(line, "Duplicate function: " + function.name());
+						return -1;
+					}
+				}
+				FunctionDefinition existing = FunctionRegistry.get(function.name());
+				if (existing != null && !existing.script().file().equals(script.file())) {
+					error(line, "Duplicate function: " + function.name());
+					return -1;
+				}
+				FunctionDefinition previous = FunctionRegistry.register(function);
+				registeredFunctions.add(new RegisteredFunction(function, previous));
 				script.addFunction(function);
 				return 1 + children.size();
 			}
@@ -143,9 +190,17 @@ public final class ScriptLoader {
 		Object value = null;
 		if (!valueSource.isEmpty()) {
 			Expression<?> parsed = parser.parseExpression(valueSource, Object.class, false);
-			value = parsed == null ? null : parsed.getValue(new ExecContext(null));
+			if (parsed == null) {
+				error(line, "Can't parse initial variable value: '" + valueSource + "'");
+				return;
+			}
+			value = parsed.getValue(new ExecContext(null));
 		}
-		Variables.set(name, value);
+		if (name.isEmpty()) {
+			error(line, "Variable name cannot be empty");
+			return;
+		}
+		initialVariables.add(new InitialVariable(name, value));
 	}
 
 	private static List<ScriptReader.Line> collectChildren(List<ScriptReader.Node> nodes, int index) {
@@ -194,7 +249,10 @@ public final class ScriptLoader {
 	private @Nullable ScriptCommand buildCommand(SkriptScript script, ScriptReader.Line headerLine,
 			String name, String argumentSpec, List<ScriptReader.Line> childLines) {
 		ScriptCommand.Builder builder = ScriptCommand.builder(name);
-		for (String rawArgument : argumentSpec.split(" ")) {
+		boolean optionalSeen = false;
+		Set<String> argumentNames = new HashSet<>();
+		String normalizedArguments = argumentSpec == null ? "" : argumentSpec.trim();
+		for (String rawArgument : normalizedArguments.isEmpty() ? new String[0] : normalizedArguments.split("\\s+")) {
 			if (rawArgument.isBlank())
 				continue;
 			ScriptCommand.Arg argument = parseCommandArgument(rawArgument);
@@ -202,6 +260,15 @@ public final class ScriptLoader {
 				error(headerLine, "Can't understand this argument: '" + rawArgument + "'");
 				return null;
 			}
+			if (optionalSeen && !argument.optional()) {
+				error(headerLine, "Required command arguments cannot follow an optional argument");
+				return null;
+			}
+			if (!argumentNames.add(argument.name())) {
+				error(headerLine, "Duplicate command argument: '" + argument.name() + "'");
+				return null;
+			}
+			optionalSeen |= argument.optional();
 			builder.addArgument(argument);
 		}
 		List<TriggerItem> triggerBody = null;
@@ -258,6 +325,8 @@ public final class ScriptLoader {
 		} else {
 			argName = cleaned;
 		}
+		if (argName.isBlank())
+			return null;
 		ClassInfo<?> type = Classes.byName(typeName);
 		if (type == null)
 			type = guessTypeFromName(argName);
@@ -274,7 +343,7 @@ public final class ScriptLoader {
 				return playerType;
 		}
 		if (lowered.contains("number") || lowered.contains("amount") || lowered.contains("count"))
-			return Classes.byClass(Number.class);
+			return Classes.byName("number");
 		if (lowered.contains("text") || lowered.contains("message"))
 			return Classes.byClass(String.class);
 		return Classes.byClass(String.class);
@@ -284,6 +353,8 @@ public final class ScriptLoader {
 			Matcher matcher, List<ScriptReader.Line> childLines) {
 		String name = matcher.group(1);
 		List<FunctionDefinition.Parameter> parameters = new ArrayList<>();
+		Set<String> parameterNames = new HashSet<>();
+		boolean optionalSeen = false;
 		String parameterSource = matcher.group(2).trim();
 		if (!parameterSource.isEmpty()) {
 			for (String chunk : parameterSource.split(",")) {
@@ -301,6 +372,15 @@ public final class ScriptLoader {
 					return null;
 				}
 				String parameterName = typeAndName.substring(0, separator).trim().toLowerCase(Locale.ROOT);
+				if (!parameterNames.add(parameterName)) {
+					error(line, "Duplicate function parameter: '" + parameterName + "'");
+					return null;
+				}
+				if (optionalSeen && !optional) {
+					error(line, "Required function parameters cannot follow an optional parameter");
+					return null;
+				}
+				optionalSeen |= optional;
 				ClassInfo<?> type = Classes.byName(typeAndName.substring(separator + 1).trim());
 				if (type == null) {
 					error(line, "Unknown parameter type: '" + typeAndName + "'");
@@ -450,6 +530,20 @@ public final class ScriptLoader {
 	private int errorReturn(ScriptReader.Line line, String message) {
 		error(line, message);
 		return -1;
+	}
+
+	private void rollback(SkriptScript script) {
+		for (Trigger trigger : script.triggers()) {
+			EventDispatch.unbindAll(trigger);
+			PeriodicEvents.unregister(trigger);
+		}
+		for (int i = registeredFunctions.size() - 1; i >= 0; i--) {
+			RegisteredFunction function = registeredFunctions.get(i);
+			FunctionRegistry.restore(function.current(), function.previous());
+		}
+		script.triggers().clear();
+		script.commands().clear();
+		script.functions().clear();
 	}
 
 	private static @Nullable String stripPrefixIgnoreCase(String content, String prefix) {

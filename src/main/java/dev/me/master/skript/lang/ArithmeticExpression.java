@@ -2,6 +2,7 @@ package dev.me.master.skript.lang;
 
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BinaryOperator;
 
@@ -35,7 +36,7 @@ public final class ArithmeticExpression implements Expression<Number> {
 
 	@Override
 	public List<Number> getValues(ExecContext context) {
-		List<Number> result = new java.util.ArrayList<>(1);
+		List<Number> result = new ArrayList<>(1);
 		for (Number l : numeric(left, context)) {
 			for (Number r : numeric(right, context)) {
 				result.add(op.fn.apply(l.doubleValue(), r.doubleValue()));
@@ -45,7 +46,7 @@ public final class ArithmeticExpression implements Expression<Number> {
 	}
 
 	private static List<Number> numeric(Expression<?> expression, ExecContext context) {
-		List<Number> numbers = new java.util.ArrayList<>();
+		List<Number> numbers = new ArrayList<>();
 		for (Object value : expression.getValues(context)) {
 			if (value instanceof Number number)
 				numbers.add(number);
@@ -132,21 +133,32 @@ public final class ArithmeticExpression implements Expression<Number> {
 		private Expression<?> parseProduct(int depth) {
 			if (depth > MAX_DEPTH)
 				throw new ArithmeticSyntaxException();
-			Expression<?> left = parseUnary(depth);
+			Expression<?> left = parsePower(depth);
 			while (true) {
 				skipSpaces();
 				int save = pos;
 				if (peek('*')) {
 					pos++;
-					left = new ArithmeticExpression(left, parseUnary(depth + 1), ArithmeticExpression.Op.MULTIPLY);
+					left = new ArithmeticExpression(left, parsePower(depth + 1), ArithmeticExpression.Op.MULTIPLY);
 				} else if (peek('/')) {
 					pos++;
-					left = new ArithmeticExpression(left, parseUnary(depth + 1), ArithmeticExpression.Op.DIVIDE);
+					left = new ArithmeticExpression(left, parsePower(depth + 1), ArithmeticExpression.Op.DIVIDE);
 				} else {
 					pos = save;
 					return left;
 				}
 			}
+		}
+
+		private Expression<?> parsePower(int depth) {
+			if (depth > MAX_DEPTH)
+				throw new ArithmeticSyntaxException();
+			Expression<?> left = parseUnary(depth);
+			skipSpaces();
+			if (!peek('^'))
+				return left;
+			pos++;
+			return new ArithmeticExpression(left, parsePower(depth + 1), ArithmeticExpression.Op.POWER);
 		}
 
 		private Expression<?> parseUnary(int depth) {
@@ -251,7 +263,7 @@ public final class ArithmeticExpression implements Expression<Number> {
 
 		@Override
 		public List<Number> getValues(ExecContext context) {
-			List<Number> values = new java.util.ArrayList<>();
+			List<Number> values = new ArrayList<>();
 			for (Object value : operand.getValues(context)) {
 				if (value instanceof Number number)
 					values.add(-number.doubleValue());

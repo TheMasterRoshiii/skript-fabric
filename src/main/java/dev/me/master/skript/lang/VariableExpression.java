@@ -5,6 +5,8 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 
 public final class VariableExpression implements Expression<Object> {
 
@@ -45,11 +47,11 @@ public final class VariableExpression implements Expression<Object> {
 				return null;
 			if (!index.equals("*") && !isPositiveInt(index) && !index.contains("%"))
 				return null;
-			return new VariableExpression(list.toLowerCase(java.util.Locale.ROOT), local, index);
+			return new VariableExpression(list.toLowerCase(Locale.ROOT), local, index);
 		}
 		if (inner.contains("%"))
 			return null;
-		return new VariableExpression(inner.toLowerCase(java.util.Locale.ROOT), local, null);
+		return new VariableExpression(inner.toLowerCase(Locale.ROOT), local, null);
 	}
 
 	private static boolean isPositiveInt(String raw) {
@@ -120,7 +122,7 @@ public final class VariableExpression implements Expression<Object> {
 		List<Object> values = new ArrayList<>(keys.size());
 		for (String key : keys)
 			values.add(resolve(context, key));
-		values.removeIf(java.util.Objects::isNull);
+		values.removeIf(Objects::isNull);
 		return values;
 	}
 

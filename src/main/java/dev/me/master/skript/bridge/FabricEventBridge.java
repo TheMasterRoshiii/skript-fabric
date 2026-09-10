@@ -1,11 +1,8 @@
 package dev.me.master.skript.bridge;
 import dev.me.master.skript.events.EventDispatch;
 import dev.me.master.skript.events.ScriptEvent;
-import dev.me.master.skript.types.CurrentServer;
-import dev.me.master.skript.variables.Variables;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
@@ -25,12 +22,6 @@ public final class FabricEventBridge {
 	}
 
 	public static void register() {
-		ServerLifecycleEvents.SERVER_STARTED.register(server ->
-				CurrentServer.attach(server));
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
-			Variables.saveNow();
-			CurrentServer.detach(server);
-		});
 		connections();
 		messages();
 		combat();

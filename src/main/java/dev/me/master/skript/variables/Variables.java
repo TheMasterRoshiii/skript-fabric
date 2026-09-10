@@ -17,12 +17,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.block.Block;
 import net.minecraft.entity.EntityType;
 import net.minecraft.registry.Registries;
@@ -37,29 +40,48 @@ import org.jetbrains.annotations.Nullable;
 public final class Variables {
 
 	private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+	private static final int SAVE_INTERVAL_TICKS = SkriptConfig.INSTANCE.variableSaveIntervalTicks;
 	private static final Map<String, Object> GLOBALS = new ConcurrentHashMap<>();
 	private static final Map<String, Integer> LIST_SIZES = new ConcurrentHashMap<>();
 	private static final AtomicBoolean SAVING = new AtomicBoolean(false);
+	private static volatile @Nullable Thread saver;
 	private static volatile boolean dirty;
 
 	private Variables() {
 	}
 
+	public static void init() {
+		ServerTickEvents.END_SERVER_TICK.register(Variables::tick);
+	}
+
+	private static void tick(MinecraftServer server) {
+		if (server.getTicks() % SAVE_INTERVAL_TICKS == 0)
+			saveIfDirty();
+	}
+
 	public static @Nullable Object get(String name) {
-		return GLOBALS.get(name.toLowerCase(java.util.Locale.ROOT));
+		return GLOBALS.get(name.toLowerCase(Locale.ROOT));
 	}
 
 	public static boolean contains(String name) {
-		return GLOBALS.containsKey(name.toLowerCase(java.util.Locale.ROOT));
+		return GLOBALS.containsKey(name.toLowerCase(Locale.ROOT));
 	}
 
 	public static void set(String name, @Nullable Object value) {
-		String key = name.toLowerCase(java.util.Locale.ROOT);
+		String key = name.toLowerCase(Locale.ROOT);
 		if (value == null)
 			GLOBALS.remove(key);
 		else
 			GLOBALS.put(key, value);
 		dirty = true;
+	}
+
+	public static void setIfAbsent(String name, @Nullable Object value) {
+		if (value == null)
+			return;
+		String key = name.toLowerCase(Locale.ROOT);
+		if (GLOBALS.putIfAbsent(key, value) == null)
+			dirty = true;
 	}
 
 	public static void delete(String name) {
@@ -73,16 +95,16 @@ public final class Variables {
 	}
 
 	public static int addToList(String listName, Object value) {
-		int next = LIST_SIZES.merge(listName.toLowerCase(java.util.Locale.ROOT), 1, Integer::sum);
+		int next = LIST_SIZES.merge(listName.toLowerCase(Locale.ROOT), 1, Integer::sum);
 		set(listName + "::" + next, value);
 		return next;
 	}
 
 	public static void removeList(String listName) {
-		String prefix = listName.toLowerCase(java.util.Locale.ROOT) + "::";
+		String prefix = listName.toLowerCase(Locale.ROOT) + "::";
 		for (String key : matchingKeys(prefix))
 			delete(key);
-		LIST_SIZES.remove(listName.toLowerCase(java.util.Locale.ROOT));
+		LIST_SIZES.remove(listName.toLowerCase(Locale.ROOT));
 	}
 
 	public static List<String> matchingKeys(String prefix) {
@@ -116,6 +138,9 @@ public final class Variables {
 
 	public static void load() {
 		Path file = SkriptConfig.INSTANCE.variablesFile;
+		GLOBALS.clear();
+		LIST_SIZES.clear();
+		dirty = false;
 		if (!Files.exists(file))
 			return;
 		try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
@@ -124,8 +149,11 @@ public final class Variables {
 				return;
 			for (Map.Entry<String, JsonElement> entry : root.getAsJsonObject("variables").entrySet()) {
 				Object value = deserialize(entry.getValue());
-				if (value != null)
-					GLOBALS.put(entry.getKey(), value);
+				if (value != null) {
+					String key = entry.getKey().toLowerCase(Locale.ROOT);
+					GLOBALS.put(key, value);
+					rememberListIndex(key);
+				}
 			}
 		} catch (IOException | RuntimeException e) {
 			SkriptLogger.error("Failed to load variables from " + file, e);
@@ -135,54 +163,112 @@ public final class Variables {
 	public static void saveIfDirty() {
 		if (!dirty)
 			return;
+		if (!SAVING.compareAndSet(false, true))
+			return;
 		dirty = false;
-		spawnSaver();
+		JsonObject snapshot;
+		try {
+			snapshot = captureSnapshot();
+		} catch (RuntimeException e) {
+			dirty = true;
+			SAVING.set(false);
+			SkriptLogger.error("Failed to snapshot variables", e);
+			return;
+		}
+		Thread writer = Thread.ofVirtual().name("skript-variable-saver").unstarted(() -> {
+			try {
+				if (!writeSnapshot(snapshot))
+					dirty = true;
+			} finally {
+				saver = null;
+				SAVING.set(false);
+			}
+		});
+		saver = writer;
+		writer.start();
 	}
 
 	public static void saveNow() {
-		long deadline = System.nanoTime() + 5_000_000_000L;
-		while (SAVING.get()) {
-			if (System.nanoTime() > deadline)
-				break;
-			Thread.onSpinWait();
-		}
-		SAVING.set(true);
+		awaitSaver();
+		if (!dirty || !SAVING.compareAndSet(false, true))
+			return;
+		dirty = false;
+		JsonObject snapshot;
 		try {
-			saveSnapshot();
+			snapshot = captureSnapshot();
+		} catch (RuntimeException e) {
+			dirty = true;
+			SAVING.set(false);
+			SkriptLogger.error("Failed to snapshot variables", e);
+			return;
+		}
+		try {
+			if (!writeSnapshot(snapshot))
+				dirty = true;
 		} finally {
 			SAVING.set(false);
 		}
 	}
 
-	private static void spawnSaver() {
-		if (!SAVING.compareAndSet(false, true))
-			return;
-		Thread writer = Thread.ofVirtual().name("skript-variable-saver").unstarted(() -> {
-			try {
-				saveSnapshot();
-			} finally {
-				SAVING.set(false);
+	private static void awaitSaver() {
+		while (SAVING.get()) {
+			Thread active = saver;
+			if (active == null) {
+				Thread.yield();
+				continue;
 			}
-		});
-		writer.start();
+			try {
+				active.join();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				SkriptLogger.error("Interrupted while saving variables", e);
+				return;
+			}
+		}
 	}
 
-	private static void saveSnapshot() {
-		Path file = SkriptConfig.INSTANCE.variablesFile;
+	private static JsonObject captureSnapshot() {
 		JsonObject root = new JsonObject();
 		JsonObject vars = new JsonObject();
 		for (Map.Entry<String, Object> entry : GLOBALS.entrySet())
 			vars.add(entry.getKey(), serialize(entry.getValue()));
 		root.add("variables", vars);
+		return root;
+	}
+
+	private static boolean writeSnapshot(JsonObject root) {
+		Path file = SkriptConfig.INSTANCE.variablesFile;
 		try {
-			Files.createDirectories(file.getParent());
+			Path parent = file.getParent();
+			if (parent != null)
+				Files.createDirectories(parent);
 			Path temp = file.resolveSibling(file.getFileName() + ".tmp");
 			try (Writer writer = Files.newBufferedWriter(temp, StandardCharsets.UTF_8)) {
 				GSON.toJson(root, writer);
 			}
-			Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+			try {
+				Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+			} catch (AtomicMoveNotSupportedException e) {
+				Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING);
+			}
+			return true;
 		} catch (IOException e) {
 			SkriptLogger.error("Failed to save variables to " + file, e);
+			return false;
+		}
+	}
+
+	private static void rememberListIndex(String key) {
+		int separator = key.lastIndexOf("::");
+		if (separator <= 0 || separator == key.length() - 2)
+			return;
+		try {
+			int index = Math.toIntExact(Long.parseLong(key.substring(separator + 2)));
+			if (index > 0) {
+				String listName = key.substring(0, separator);
+				LIST_SIZES.merge(listName, index, Math::max);
+			}
+		} catch (NumberFormatException | ArithmeticException ignored) {
 		}
 	}
 
@@ -349,6 +435,7 @@ public final class Variables {
 				GLOBALS.remove(key);
 			else
 				GLOBALS.put(key, resolved);
+			dirty = true;
 		}
 	}
 }

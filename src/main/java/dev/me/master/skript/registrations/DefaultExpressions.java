@@ -436,13 +436,13 @@ public final class DefaultExpressions {
 	}
 
 	private static double doubleOf(Expression<?> source, ExecContext context, double fallback) {
-		Number value = (Number) source.getObjectValue(context);
-		return value == null ? fallback : value.doubleValue();
+		Object rawValue = source.getObjectValue(context);
+		return rawValue instanceof Number value ? value.doubleValue() : fallback;
 	}
 
 	private static long timeSpanOf(Expression<?> source, ExecContext context) {
-		TimeSpan span = (TimeSpan) source.getObjectValue(context);
-		return span == null ? 0 : span.ticks();
+		Object rawValue = source.getObjectValue(context);
+		return rawValue instanceof TimeSpan span ? span.ticks() : 0;
 	}
 
 	private static final class CurrentServerHolder {

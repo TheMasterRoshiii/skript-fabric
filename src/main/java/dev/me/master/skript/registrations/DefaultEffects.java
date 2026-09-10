@@ -1,4 +1,5 @@
 package dev.me.master.skript.registrations;
+import dev.me.master.skript.config.SkriptConfig;
 import dev.me.master.skript.lang.ClassInfo;
 import dev.me.master.skript.lang.Classes;
 import dev.me.master.skript.lang.DelaySignal;
@@ -23,9 +24,11 @@ import dev.me.master.skript.types.WorldPos;
 import dev.me.master.skript.util.SkriptLogger;
 import dev.me.master.skript.util.TimeSpan;
 import dev.me.master.skript.variables.Variables;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.Entity;
@@ -46,7 +49,7 @@ import org.jetbrains.annotations.Nullable;
 
 public final class DefaultEffects {
 
-	private static final int MAX_SPAWN_COUNT = 64;
+	private static final int MAX_SPAWN_COUNT = SkriptConfig.INSTANCE.maxSpawnCount;
 
 	private DefaultEffects() {
 	}
@@ -86,7 +89,10 @@ public final class DefaultEffects {
 				new String[] {"broadcast %strings% [on %world%]"},
 				(line, parser, pattern, match) -> {
 					Expression<?> messages = parser.parseExpression(match.slotInputs()[0], String.class, true);
-					if (messages == null)
+					String worldSource = match.slotInputs().length > 1 ? match.slotInputs()[1] : null;
+					Expression<?> world = worldSource == null || worldSource.isBlank()
+							? null : parser.parseExpression(worldSource, ServerWorld.class, false);
+					if (messages == null || worldSource != null && !worldSource.isBlank() && world == null)
 						return null;
 					return new Effect(0) {
 						@Override
@@ -94,9 +100,21 @@ public final class DefaultEffects {
 							MinecraftServer server = Support.server();
 							if (server == null)
 								return;
+							ServerWorld target = null;
+							if (world != null) {
+								Object candidate = world.getObjectValue(context);
+								if (!(candidate instanceof ServerWorld resolved))
+									return;
+								target = resolved;
+							}
 							for (Object message : messages.getObjectValues(context)) {
 								Text text = Text.literal(VariableString.colorize(Classes.toStringValue(message)));
-								server.getPlayerManager().broadcast(text, false);
+								if (target == null) {
+									server.getPlayerManager().broadcast(text, false);
+									continue;
+								}
+								for (ServerPlayerEntity player : target.getPlayers())
+									player.sendMessage(text);
 							}
 						}
 
@@ -236,11 +254,16 @@ public final class DefaultEffects {
 		@Override
 		protected void run(ExecContext context) {
 			List<Object> values = value.getObjectValues(context);
-			if (kind == ChangeKind.ADD && variable.isListAll()) {
-				writeListEntries(context, values);
-				return;
-			}
-			if (kind == ChangeKind.REMOVE && variable.isListAll()) {
+			if (variable.isListAll()) {
+				if (kind == ChangeKind.SET) {
+					deleteVariable(context, variable);
+					writeListEntries(context, values);
+					return;
+				}
+				if (kind == ChangeKind.ADD) {
+					writeListEntries(context, values);
+					return;
+				}
 				removeFromList(context, values);
 				return;
 			}
@@ -288,7 +311,7 @@ public final class DefaultEffects {
 
 		private void removeFromList(ExecContext context, List<Object> values) {
 			List<String> keys = variable.keys(context);
-			List<String> doomed = new java.util.ArrayList<>();
+			List<String> doomed = new ArrayList<>();
 			for (String key : keys) {
 				Object existing = variable.isLocal()
 						? context.getLocal(key)
@@ -456,14 +479,14 @@ public final class DefaultEffects {
 					return new Effect(0) {
 						@Override
 						protected void run(ExecContext context) {
-							WorldPos destination = (WorldPos) location.getObjectValue(context);
-							if (destination == null)
+							Object rawDestination = location.getObjectValue(context);
+							if (!(rawDestination instanceof WorldPos destination))
 								return;
 							for (Object candidate : entities.getObjectValues(context)) {
 								if (!(candidate instanceof Entity entity) || !entity.isAlive())
 									continue;
 								entity.teleport(destination.world(), destination.x(), destination.y(),
-										destination.z(), java.util.Set.of(), destination.yaw(), destination.pitch());
+										destination.z(), Set.of(), destination.yaw(), destination.pitch());
 							}
 						}
 					};
@@ -500,9 +523,11 @@ public final class DefaultEffects {
 							|| !(literal.value() instanceof EntityType<?> entityType))
 						return null;
 					String positionSource = match.slotInputs()[positionIndex];
-					Expression<?> position = positionSource.isBlank()
+					Expression<?> position = positionSource == null || positionSource.isBlank()
 							? null
 							: parser.parseExpression(positionSource, WorldPos.class, false);
+					if (positionSource != null && !positionSource.isBlank() && position == null)
+						return null;
 					return new Spawner(amount, entityType, position);
 				});
 		SyntaxRegistry.registerEffect(8,
@@ -531,8 +556,8 @@ public final class DefaultEffects {
 					return new Effect(0) {
 						@Override
 						protected void run(ExecContext context) {
-							Number damageAmount = (Number) amount.getObjectValue(context);
-							if (damageAmount == null || damageAmount.floatValue() <= 0)
+							Object rawAmount = amount.getObjectValue(context);
+							if (!(rawAmount instanceof Number damageAmount) || damageAmount.floatValue() <= 0)
 								return;
 							for (Object candidate : entities.getObjectValues(context)) {
 								if (!(candidate instanceof LivingEntity living) || !living.isAlive())
@@ -566,8 +591,9 @@ public final class DefaultEffects {
 				return;
 			int count = 1;
 			if (amount != null) {
-				Number parsed = (Number) amount.getObjectValue(context);
-				count = parsed == null ? 1 : Math.max(1, Math.min(MAX_SPAWN_COUNT, parsed.intValue()));
+				Object rawAmount = amount.getObjectValue(context);
+				if (rawAmount instanceof Number parsed)
+					count = Math.max(1, Math.min(MAX_SPAWN_COUNT, parsed.intValue()));
 			}
 			for (int i = 0; i < count; i++) {
 				Entity spawned = type.create(at.world());
@@ -581,12 +607,20 @@ public final class DefaultEffects {
 		}
 
 		private WorldPos resolveSpawnPosition(ExecContext context, @Nullable Expression<?> positionExpression) {
-			if (positionExpression != null)
-				return (WorldPos) positionExpression.getObjectValue(context);
-			ServerWorld world = Support.eventWorld(context);
+			if (positionExpression != null) {
+				Object rawPosition = positionExpression.getObjectValue(context);
+				return rawPosition instanceof WorldPos position ? position : null;
+			}
+			ServerPlayerEntity eventPlayer = context.hasEvent()
+					? EventValues.get(context.event(), ServerPlayerEntity.class)
+					: null;
+			ServerWorld world = eventPlayer != null && eventPlayer.getWorld() instanceof ServerWorld playerWorld
+					? playerWorld : Support.eventWorld(context);
 			BlockPos anchor = context.hasEvent()
 					? EventValues.get(context.event(), BlockPos.class)
 					: null;
+			if (anchor == null && eventPlayer != null)
+				anchor = eventPlayer.getBlockPos();
 			if (anchor == null)
 				anchor = BlockPos.ofFloored(0, 64, 0);
 			if (world == null) {
@@ -625,8 +659,8 @@ public final class DefaultEffects {
 					return new Effect(0) {
 						@Override
 						protected void run(ExecContext context) {
-							BlockRef reference = (BlockRef) blockRef.getObjectValue(context);
-							if (reference == null)
+							Object rawReference = blockRef.getObjectValue(context);
+							if (!(rawReference instanceof BlockRef reference))
 								return;
 							reference.world().setBlockState(reference.pos(), resolved.getDefaultState());
 						}
@@ -641,8 +675,8 @@ public final class DefaultEffects {
 					return new Effect(0) {
 						@Override
 						protected void run(ExecContext context) {
-							BlockRef reference = (BlockRef) blockRef.getObjectValue(context);
-							if (reference == null)
+							Object rawReference = blockRef.getObjectValue(context);
+							if (!(rawReference instanceof BlockRef reference))
 								return;
 							reference.world().setBlockState(reference.pos(), Blocks.AIR.getDefaultState());
 						}
@@ -702,12 +736,16 @@ public final class DefaultEffects {
 					return new Effect(0) {
 						@Override
 						protected void run(ExecContext context) {
-							WorldPos at = (WorldPos) location.getObjectValue(context);
-							if (at == null)
+							Object rawLocation = location.getObjectValue(context);
+							if (!(rawLocation instanceof WorldPos at))
 								return;
 							String raw = Classes.toStringValue(soundName.getObjectValue(context))
-									.toLowerCase(Locale.ROOT).replace(' ', '_');
-							Identifier id = Identifier.of(raw.contains(":") ? raw : "minecraft:" + raw);
+								.toLowerCase(Locale.ROOT).replace(' ', '_');
+							Identifier id = Identifier.tryParse(raw.contains(":") ? raw : "minecraft:" + raw);
+							if (id == null) {
+								SkriptLogger.warn("Invalid sound identifier: '" + raw + "'");
+								return;
+							}
 							SoundEvent sound = SoundEvent.of(id);
 							at.world().playSound(null, at.x(), at.y(), at.z(),
 									RegistryEntry.of(sound), SoundCategory.MASTER, 1f, 1f, 0L);

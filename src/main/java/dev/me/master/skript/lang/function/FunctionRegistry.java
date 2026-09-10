@@ -3,6 +3,7 @@ package dev.me.master.skript.lang.function;
 import dev.me.master.skript.lang.ExecContext;
 import dev.me.master.skript.lang.Expression;
 import dev.me.master.skript.lang.Parser;
+import dev.me.master.skript.script.SkriptScript;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
@@ -18,12 +19,25 @@ public final class FunctionRegistry {
 	private FunctionRegistry() {
 	}
 
-	public static void register(FunctionDefinition definition) {
-		FUNCTIONS.put(definition.name(), definition);
+	public static @Nullable FunctionDefinition register(FunctionDefinition definition) {
+		return FUNCTIONS.put(definition.name(), definition);
+	}
+
+	public static void restore(FunctionDefinition current, @Nullable FunctionDefinition previous) {
+		if (FUNCTIONS.get(current.name()) != current)
+			return;
+		if (previous == null)
+			FUNCTIONS.remove(current.name());
+		else
+			FUNCTIONS.put(current.name(), previous);
 	}
 
 	public static void unregisterScript(String scriptName) {
-		FUNCTIONS.keySet().removeIf(name -> FUNCTIONS.get(name) != null && FUNCTIONS.get(name).script().name().equals(scriptName));
+		FUNCTIONS.entrySet().removeIf(entry -> entry.getValue().script().name().equals(scriptName));
+	}
+
+	public static void unregisterScript(SkriptScript script) {
+		FUNCTIONS.entrySet().removeIf(entry -> entry.getValue().script() == script);
 	}
 
 	public static boolean exists(String name) {
@@ -50,11 +64,17 @@ public final class FunctionRegistry {
 				? List.of()
 				: Parser.splitTopLevel(argumentSource, ',', false);
 		FunctionDefinition definition = get(name);
-		if (chunks.size() > definition.parameters().size())
+		int required = 0;
+		for (FunctionDefinition.Parameter parameter : definition.parameters()) {
+			if (parameter.defaultValue() == null)
+				required++;
+		}
+		if (chunks.size() < required || chunks.size() > definition.parameters().size())
 			return null;
 		List<Expression<?>> arguments = new ArrayList<>(chunks.size());
-		for (String chunk : chunks) {
-			Expression<?> argument = parser.parseExpression(chunk, Object.class, true);
+		for (int i = 0; i < chunks.size(); i++) {
+			FunctionDefinition.Parameter parameter = definition.parameters().get(i);
+			Expression<?> argument = parser.parseExpression(chunks.get(i), parameter.type().type(), false);
 			if (argument == null)
 				return null;
 			arguments.add(argument);

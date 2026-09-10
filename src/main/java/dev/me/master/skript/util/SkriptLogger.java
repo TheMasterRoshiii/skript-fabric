@@ -1,8 +1,11 @@
 package dev.me.master.skript.util;
 
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 public final class SkriptLogger {
 
-	private static final java.util.logging.Logger LOGGER = java.util.logging.Logger.getLogger("skript");
+	private static final Logger LOGGER = Logger.getLogger("skript");
 
 	private SkriptLogger() {
 	}
@@ -20,6 +23,6 @@ public final class SkriptLogger {
 	}
 
 	public static void error(String message, Throwable throwable) {
-		LOGGER.log(java.util.logging.Level.SEVERE, message, throwable);
+		LOGGER.log(Level.SEVERE, message, throwable);
 	}
 }

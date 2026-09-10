@@ -1,6 +1,7 @@
 package dev.me.master.skript.lang;
 
 import java.util.List;
+import java.util.Iterator;
 
 public final class Frame {
 
@@ -8,7 +9,7 @@ public final class Frame {
 	public List<TriggerItem> children;
 	public int pc;
 	public boolean entered;
-	public java.util.Iterator<?> iterator;
+	public Iterator<?> iterator;
 
 	public Frame(TriggerItem.Section section) {
 		this.section = section;

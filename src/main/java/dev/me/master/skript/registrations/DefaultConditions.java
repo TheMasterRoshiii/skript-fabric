@@ -10,6 +10,7 @@ import dev.me.master.skript.lang.SkriptPattern;
 import dev.me.master.skript.lang.SyntaxRegistry;
 import dev.me.master.skript.types.ItemType;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import org.jetbrains.annotations.Nullable;
@@ -104,12 +105,13 @@ public final class DefaultConditions {
 				new String[] {"%number% chance"},
 				(parser, pattern, match) -> {
 					Expression<?> chance = parser.parseExpression(match.slotInputs()[0], Number.class, false);
-					if (chance == null)
-						return null;
-					return context -> {
-						Number percent = (Number) chance.getObjectValue(context);
-						return percent != null && Math.random() * 100 < percent.doubleValue();
-					};
+						if (chance == null)
+							return null;
+						return context -> {
+							Object rawPercent = chance.getObjectValue(context);
+						return rawPercent instanceof Number percent
+								&& Math.random() * 100 < percent.doubleValue();
+						};
 				});
 	}
 
@@ -119,7 +121,7 @@ public final class DefaultConditions {
 	}
 
 	private static boolean hasCustomPermission(ServerPlayerEntity player, String permission) {
-		String tag = "skript.perm." + permission.toLowerCase(java.util.Locale.ROOT).replace(' ', '.');
+		String tag = "skript.perm." + permission.toLowerCase(Locale.ROOT).replace(' ', '.');
 		return player.getCommandTags().contains(tag);
 	}
 

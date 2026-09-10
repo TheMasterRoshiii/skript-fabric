@@ -4,7 +4,9 @@
   "package": "dev.me.master.skript.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "CommandManagerMixin"
+    "CommandManagerMixin",
+    "CommandNodeAccessMixin",
+    "ServerPlayerInteractionManagerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

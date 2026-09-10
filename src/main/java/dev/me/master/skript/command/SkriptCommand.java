@@ -5,6 +5,8 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import dev.me.master.skript.config.SkriptConfig;
 import dev.me.master.skript.script.SkriptScript;
+import dev.me.master.skript.scheduler.Scheduler;
+import dev.me.master.skript.scripts.ScriptCommandBridge;
 import dev.me.master.skript.scripts.ScriptManager;
 import java.util.Locale;
 import net.minecraft.server.command.ServerCommandSource;
@@ -43,8 +45,11 @@ public final class SkriptCommand {
 		root.then(LiteralArgumentBuilder.<ServerCommandSource>literal("disable")
 				.then(LiteralArgumentBuilder.<ServerCommandSource>literal("all")
 						.executes(context -> {
-							for (SkriptScript script : ScriptManager.all())
+							for (SkriptScript script : ScriptManager.all()) {
 								script.setEnabled(false);
+								Scheduler.cancelScript(script);
+							}
+							ScriptCommandBridge.syncAll(ScriptManager.all());
 							feedback(context.getSource(), "Disabled all scripts");
 							return 1;
 						}))
@@ -55,6 +60,8 @@ public final class SkriptCommand {
 						return 0;
 					}
 					script.setEnabled(false);
+					Scheduler.cancelScript(script);
+					ScriptCommandBridge.syncAll(ScriptManager.all());
 					feedback(source, "Disabled " + name);
 					return 1;
 				})));
@@ -67,6 +74,7 @@ public final class SkriptCommand {
 						return 0;
 					}
 					script.setEnabled(true);
+					ScriptCommandBridge.syncAll(ScriptManager.all());
 					feedback(source, "Enabled " + name);
 					return 1;
 				})));

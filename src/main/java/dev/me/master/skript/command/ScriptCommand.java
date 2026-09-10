@@ -2,6 +2,7 @@ package dev.me.master.skript.command;
 
 import dev.me.master.skript.lang.Trigger;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -64,7 +65,7 @@ public final class ScriptCommand {
 	public static final class Builder {
 
 		private final String name;
-		private final List<Arg> arguments = new java.util.ArrayList<>();
+		private final List<Arg> arguments = new ArrayList<>();
 		private String description = "";
 		private String usage = "";
 		private String permission = "";

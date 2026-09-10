@@ -8,7 +8,7 @@
   "contact": {},
   "license": "All-Rights-Reserved",
   "icon": "assets/skript/icon.png",
-  "environment": "*",
+  "environment": "server",
   "entrypoints": {
     "main": [
       "dev.me.master.skript.Skript"
