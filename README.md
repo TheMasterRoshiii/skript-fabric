@@ -24,18 +24,22 @@ Este repositorio contiene el motor completo: parser del lenguaje, runtime reanud
 5. [Arquitectura](#arquitectura)
 6. [Modelo de hilos](#modelo-de-hilos)
 7. [Acceso profundo (Mixin / Access Widener)](#acceso-profundo)
-8. [Rendimiento](#rendimiento)
-9. [Testing](#testing)
-10. [Diferencias con el Skript original](#diferencias-con-el-skript-original)
-11. [Compilar desde fuente](#compilar-desde-fuente)
+8. [Soporte y limitaciones](#soporte-y-limitaciones)
+9. [Diferencias con el Skript original](#diferencias-con-el-skript-original)
+10. [Compilar desde fuente](#compilar-desde-fuente)
 
 ---
 
 ## Instalación
 
 1. Copia `build/libs/skript-1.0.0.jar` a la carpeta `mods/` de un servidor Fabric 1.21.1 con fabric-api instalado.
-2. Arranca el servidor una vez: se crea `skript/scripts/` junto al jar de configuración.
-3. Escribe scripts `.sk` dentro de `skript/scripts/` y reinicia o ejecuta `/skript reload`.
+2. Arranca el servidor una vez: se crea `skript/scripts/` dentro del directorio de trabajo del servidor.
+3. Guarda tus scripts como texto plano dentro de esa carpeta y reinicia o ejecuta `/skript reload`.
+
+Se aceptan `.sk` sin distinguir mayúsculas (`.SK` también) y `.sk.txt` para editores de hosts que añaden
+`.txt`. El tipo MIME y la asociación del archivo en el panel no intervienen. La lectura usa UTF-8 por defecto,
+elimina su BOM si existe y admite UTF-16 LE/BE con BOM. Una codificación inválida genera un error con la ruta
+completa; no se sustituye texto silenciosamente.
 
 Configuración opcional en `skript/config.properties`:
 
@@ -44,9 +48,25 @@ scripts.folder=scripts
 variables.file=variables.json
 variables.save-interval-seconds=120
 log.verbose=false
+patches.itemconsume=true
 ```
 
-Los archivos cuyo nombre empiece por `-` se ignoran (convención de "deshabilitado").
+`scripts.folder` admite una ruta relativa a `skript/` o una ruta absoluta, incluso con espacios. El log muestra
+la carpeta buscada y la ruta de cada archivo cargado, junto con su número de triggers, comandos y funciones.
+Se recorren subcarpetas en orden de ruta; archivos y subcarpetas cuyo nombre empieza por `-` se ignoran.
+Los enlaces a archivos regulares se admiten; no se recorren enlaces a directorios.
+
+### Si el host no reconoce el archivo
+
+Comprueba la ruta que aparece en el log, guarda el archivo como texto plano UTF-8 con nombre `funciones.sk`
+o `funciones.sk.txt` y ejecuta `/skript reload`. El mod abre el contenido directamente. Un `.txt` genérico
+no se carga y un error de sintaxis sigue siendo un error aunque la extensión sea válida.
+
+Los errores muestran `ruta:línea:columna`, la causa y el fragmento señalado con `<--[HERE]` en el log y en
+`/skript reload`. Si falla un argumento, indican el tipo o la sintaxis esperada. Cuando no se puede aislar
+el fragmento, señalan el inicio de la línea.
+Los errores de lectura indican el archivo y el motivo; las opciones inválidas de `config.properties`
+indican la clave, el valor esperado y el valor predeterminado usado.
 
 ## Primeros pasos
 
@@ -88,12 +108,45 @@ on damage                  on damage of player        on death
 on death of player         on break                   on break of stone
 on place                   on place of diamond block  on rightclick
 on leftclick               on respawn                 on command
-on load
+on load                    on item consume            on item use
+on item use of apple       on totem pop               on equipment change
+on player equipment change on bed enter               on bed leave
+on player world change     on entity world change     on entity load
+on entity load of zombie   on entity unload           on server start
+on server stop
 ```
 
-Los filtros `of <tipo>` aceptan `player`, nombres de entidad (`zombie`) o items/bloques según el evento. Los eventos cancelables (`chat`, `damage`, `break`, clicks, `command`) respetan `cancel event`.
+Los filtros `of <tipo>` aceptan `player`, nombres de entidad (`zombie`) o items/bloques según el evento. Un tipo desconocido impide cargar el script e indica archivo, línea, columna y el tipo esperado. `break` y `place` requieren un item de bloque. Los eventos cancelables (`chat`, `damage`, `break`, clicks, `command`, `item consume`, `item use`) respetan `cancel event`. En los demás, usarlo produce un error con archivo, línea y causa.
 
-Valores disponibles por evento: `player`, `attacker`, `victim`, `message`, `damage`, `command`, `event-block`, `world`.
+Valores disponibles por evento: `player`, `attacker`, `victim`, `message`, `damage`, `command`, `event-block`, `event-item`, `world`.
+
+`on item consume` se dispara al completar el uso de comida, pociones o leche, antes de consumir el objeto.
+Permite usar `player`, `event-item`, `name of event-item` (incluye el nombre personalizado) y `world`.
+`cancel event` evita la consumición y sus efectos. `patches.itemconsume=false` desactiva su Mixin al reiniciar;
+los scripts que declaren ese evento reciben un error con la opción que deben activar.
+
+`on item use` ocurre al intentar usar el ítem; `on item consume`, al terminar de consumirlo.
+`on totem pop` ocurre después de que Minecraft consuma el tótem y aplique sus efectos. Conserva el nombre
+personalizado en `name of event-item`; no admite cancelación. `patches.totempop=false` desactiva su Mixin al
+reiniciar y explica qué opción activar si un script declara ese evento.
+
+```vb
+on totem pop:
+    if name of event-item is "Amuleto":
+        send "Tu Amuleto te salvó." to player
+```
+
+| Evento | Valores adicionales |
+|---|---|
+| `item use`, `totem pop` | `event-item`, `name of event-item`, `event-entity`, `player`, `world` |
+| `equipment change` | `event-item`, `previous item`, `equipment slot`, `event-entity`, `player`, `world` |
+| `bed enter`, `bed leave` | `player`, `bed`, `world` |
+| `world change`, `dimension change` | `event-entity`, `player` si es jugador, `previous world`, `world` de destino |
+| `entity load`, `entity unload` | `event-entity`, `player` si es jugador, `world` |
+
+Los cambios de equipo, cama y mundo observan acciones ya realizadas. `entity load` y `entity unload`
+también incluyen cargas y descargas de chunks; no equivalen a nacimiento y muerte.
+`server start` ocurre después de cargar los scripts; `server stop`, antes de descargarlos.
 
 ### Secciones
 
@@ -153,9 +206,20 @@ a is less than b      a < b                  a is at most b      a <= b
 %objs% contains %obj%                        %player% has permission x
 %entities% exists / is set                   %player% is sneaking
 %player% is holding %itemtype%               %number% chance
+op / not op                                 %player% is op / is not op
 ```
 
 La comparación usa ANY-semantics sobre listas: `{lista::*} contains 3` es verdadero si algún elemento coincide.
+
+`op` usa el jugador del evento y consulta los operadores del servidor, incluso con nivel 1.
+También acepta `player is op`, `player is an operator`, `not op` y `player is not op`.
+Sin jugador asociado, estas condiciones dan falso. Para ejecutar el cuerpo de un evento solo para operadores:
+
+```vb
+on item consume:
+    if op:
+        send "Consumido por un operador." to player
+```
 
 ### Efectos
 
@@ -211,13 +275,20 @@ Se registran en el dispatcher real de Brigadier (tab-completion del nombre inclu
 /skript list                lista scripts con estado y nº de triggers
 ```
 
-Requieren nivel de permiso 2. Errores de parseo se reportan con archivo y número de línea; un script con errores se desactiva entero sin afectar a los demás.
+Requieren nivel de permiso 2. `/skript list` muestra rutas relativas a la carpeta configurada. Para archivos
+con igual nombre en subcarpetas usa, por ejemplo, `/skript reload util/funciones.sk`; se admiten nombres con
+espacios. Un nombre de archivo sin ruta solo sirve si es único entre los scripts cargados. Usa la ruta relativa
+para cargar un archivo nuevo o corregido que antes falló. Recargar un archivo con errores conserva su
+versión anterior y su estado. El comando confirma la solicitud y muestra el resultado al terminar; solo admite
+una recarga pendiente. La lectura de archivos ocurre en un hilo virtual. La recarga completa prepara la carpeta
+antes de reemplazar los scripts: si falla el escaneo, conserva los anteriores; los archivos que no compilen
+quedan fuera de la nueva carga. El resultado indica cuántos archivos cargaron y cuántos fallaron.
 
 ## Arquitectura
 
 ```
 dev.me.master.skript
-├── SkriptMod           entrypoint: boot idempotente + ciclo de vida
+├── Skript              entrypoint: boot idempotente + ciclo de vida
 ├── SkriptConfig        configuración inmutable leída una vez al boot
 ├── lang/               núcleo del lenguaje
 │   ├── SkriptPattern   patrones Skript → java.util.regex con backtracking
@@ -229,7 +300,7 @@ dev.me.master.skript
 │   ├── VariableString  texto con slots %expr%, códigos de color
 │   ├── Classes         ClassInfo + comparators + converters (BFS ≤ 3 saltos)
 │   └── function/       definiciones y llamadas a funciones de script
-├── loader/             lectura de archivos → árbol de nodos → triggers
+├── loader/             selección/decodificación de texto → árbol de nodos → triggers
 ├── events/             payloads sellados (sealed records) + tabla de dispatch
 ├── registrations/      sintaxis por defecto (tipos, expresiones, condiciones,
 │                       efectos, eventos, event values)
@@ -238,7 +309,7 @@ dev.me.master.skript
 ├── scripts/            gestor de ciclo de vida + puente de comandos a Brigadier
 ├── command/            /skript ...
 ├── bridge/             adaptadores de callbacks de fabric-api
-├── mixin/              hook único a CommandManager (evento command)
+├── mixin/              hooks de comandos/interacción + accessor de Brigadier
 ├── types/              ItemType, WorldPos, BlockRef, AliasIndex sobre registries
 └── util/               TimeSpan, logging, puente a fabric-loader
 ```
@@ -252,49 +323,35 @@ Decisiones clave:
 
 ## Modelo de hilos
 
-Toda la ejecución de scripts ocurre en el **server thread**. No hay locks entre jugadores ni estado compartido mutable fuera de dos casos deliberados:
+Los triggers, funciones, compilación y cambios del juego se ejecutan en el hilo del servidor.
 
 | Caso | Mecanismo |
 |---|---|
+| Lectura de recargas | un hilo virtual; contenidos inmutables devueltos mediante una cola de capacidad 1 |
 | Guardado periódico de variables | hilo virtual + snapshot sobre `ConcurrentHashMap`, gate con `AtomicBoolean` |
 | Parada del servidor | `saveNow()` espera ≤ 5 s al writer en vuelo y vuelca síncrono |
 
-`wait` no bloquea nada: suspende el trigger y lo re-agenda por tick. La cancelación de eventos solo aplica durante la ejecución síncrona del trigger (igual que en Bukkit).
+`wait` suspende el trigger y lo re-agenda por tick. `cancel event` debe ejecutarse antes de `wait`: después, el evento ya terminó y se informa el archivo, la línea y la corrección.
 
 ## Acceso profundo
 
-Filosofía: cuando la API pública no alcanza, se baja a internals de forma **aislada, verificada y reversible**.
-
 | Objetivo | Técnica | Verificación |
 |---|---|---|
-| Evento `on command` | Mixin único `@Inject(HEAD, cancellable)` en `CommandManager#executeWithPrefix(ServerCommandSource, String)` | reflexión en boot: si la firma cambia, `AssertionError` con mensaje accionable |
+| Evento `on command` | `@Inject(HEAD, cancellable)` en `CommandManager#executeWithPrefix(ServerCommandSource, String)` | Mixin requerido con `defaultRequire=1` |
+| Evento `on item consume` | Inyección en `ServerPlayerEntity#consumeItem`, antes del paquete de finalización | Mixin requerido; se puede desactivar con `patches.itemconsume=false` |
+| Evento `on totem pop` | Inyección en `LivingEntity#tryUseTotem`, después del estado 35 | Mixin requerido; se puede desactivar con `patches.totempop=false` |
 | Kick (`connection.disconnect`) | Access Widener: campo `ServerCommonNetworkHandler.connection` → accessible | validado por `validateAccessWidener` en build |
-| Remoción de comandos de script | reflection sobre `CommandNode.children/literals` (Brigadier es librería aparte, fuera del alcance del AW) | fail-loud con `AssertionError` si cambia la forma |
+| Remoción de comandos de script | Accessor Mixin sobre `CommandNode.children/literals/arguments` | comprobación del accessor al iniciar; `AssertionError` si no se aplicó |
 
-Ningún tipo obfuscado o interno se filtra al código de dominio: el mixin habla con `CommandEventHook`, que expone solo una vista mínima del source.
+## Soporte y limitaciones
 
-## Rendimiento
-
-- Cada listener de evento hace short-circuit O(1) si ningún trigger escucha ese tipo (contadores precalculados al hacer bind).
-- `broadcast` usa `PlayerManager.broadcast` (un envío batched, nunca un paquete por jugador).
-- Scheduler: `PriorityQueue` por tick, O(log n) por operación, sin locks (dueño único: server thread).
-- Triggers periódicos: un único hook de tick, avance O(triggers activos).
-- AliasIndex: nombres de items/entity types indexados una vez al boot en mapas inmutables; lookup O(1).
-- Variables: `ConcurrentHashMap` global; listas como claves jerárquicas ordenadas (`l::1`, `l::2`, ...) con vista ordenada por sufijo.
-- Sin `synchronized`, sin `AtomicInteger` en datos single-thread, sin copias defensivas en hot paths.
-
-## Testing
-
-Harness headless (`Dbg*`, fuera del jar) que ejercita sin levantar servidor:
-
-- Carga completa de `run/skript/scripts/smoke.sk`: opciones, variables iniciales, funciones, 10 eventos, secciones anidadas, loops con `loop-index`, índices dinámicos, `wait` (suspensión verificable), comandos.
-- Ejecución real de triggers headless comprobando estado final de variables.
-- Round-trip de persistencia JSON (escritura → lectura → valores tipados intactos).
-- Probes unitarios de patrones, aritmética, comparadores e índices.
-
-`blocky.sk` cubre literales de bloque/item que requieren registries vivas; fuera de servidor falla de forma limpia y avisada.
-
-En servidor real basta `/skript reload` y revisar el log: errores de parseo incluyen archivo y línea.
+- Esta rama soporta Fabric con Minecraft 1.21.1 y Java 21. No se ofrece soporte para otros loaders o versiones.
+- UTF-16 requiere BOM; otros formatos de texto y archivos `.txt` genéricos no se autodetectan.
+- Las funciones deben definirse antes de sus llamadas. Entre archivos, importa el orden de ruta de carga.
+- Una llamada ya compilada conserva su definición de función. Usa `/skript reload` completo si cambias
+  funciones que otros scripts llaman.
+- La recarga completa deja fuera archivos inválidos. El comando y el log muestran la ruta, línea, columna y causa
+  del error; los fallos de lectura indican la ruta y el motivo.
 
 ## Diferencias con el Skript original
 
@@ -316,3 +373,6 @@ Implementado con semántica equivalente pero superficie propia:
 ```
 
 Loom 1.17, Minecraft 1.21.1, yarn `1.21.1+build.3`, fabric-api `0.116.x`.
+
+GitHub Actions compila con Java 21 en cada push y pull request; también permite ejecución manual.
+Descarga el `.jar` desde `Actions` → `Build` → la ejecución → `Artifacts` → `skript-<commit>`.

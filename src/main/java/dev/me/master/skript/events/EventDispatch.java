@@ -22,6 +22,17 @@ public final class EventDispatch {
 			ScriptEvent.PlayerJoin.class,
 			ScriptEvent.PlayerQuit.class,
 			ScriptEvent.Chat.class,
+			ScriptEvent.ItemConsume.class,
+            ScriptEvent.ItemUse.class,
+            ScriptEvent.TotemPop.class,
+            ScriptEvent.EquipmentChange.class,
+            ScriptEvent.SleepStart.class,
+            ScriptEvent.SleepStop.class,
+            ScriptEvent.WorldChange.class,
+            ScriptEvent.EntityLoad.class,
+            ScriptEvent.EntityUnload.class,
+            ScriptEvent.ServerStart.class,
+            ScriptEvent.ServerStop.class,
 			ScriptEvent.Damage.class,
 			ScriptEvent.Death.class,
 			ScriptEvent.BlockBreak.class,
@@ -84,6 +95,8 @@ public final class EventDispatch {
 			} catch (RuntimeException e) {
 				SkriptLogger.error("Error in trigger '" + binding.trigger().debugName()
 						+ "' (" + binding.trigger().script().name() + ")", e);
+			} finally {
+                context.closeCancellation();
 			}
 			if (context.isCancelled()) {
 				cancelled = true;

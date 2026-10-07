@@ -3,8 +3,12 @@ package dev.me.master.skript.registrations;
 import dev.me.master.skript.events.ScriptEvent;
 import dev.me.master.skript.lang.EventValues;
 import dev.me.master.skript.types.BlockRef;
+import dev.me.master.skript.types.ItemType;
+import java.util.Locale;
+import java.util.function.Function;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 
@@ -17,6 +21,60 @@ public final class DefaultEventValues {
 		playerEvents();
 		combat();
 		blocks();
+		consumption();
+        additionalEvents();
+	}
+
+    private static void additionalEvents() {
+        itemValues(ScriptEvent.ItemUse.class, ScriptEvent.ItemUse::item, ScriptEvent.ItemUse::player);
+        itemValues(ScriptEvent.TotemPop.class, ScriptEvent.TotemPop::item, ScriptEvent.TotemPop::entity);
+        itemValues(ScriptEvent.EquipmentChange.class,
+                ScriptEvent.EquipmentChange::item, ScriptEvent.EquipmentChange::entity);
+        EventValues.register(ScriptEvent.EquipmentChange.class, String.class,
+                (ScriptEvent.EquipmentChange event) -> event.slot().name().toLowerCase(Locale.ROOT));
+        EventValues.register(ScriptEvent.SleepStart.class, ServerPlayerEntity.class,
+                (ScriptEvent.SleepStart event) -> event.player());
+        EventValues.register(ScriptEvent.SleepStart.class, ServerWorld.class,
+                (ScriptEvent.SleepStart event) -> event.world());
+        EventValues.register(ScriptEvent.SleepStart.class, BlockRef.class,
+                (ScriptEvent.SleepStart event) -> new BlockRef(event.world(), event.pos()));
+        EventValues.register(ScriptEvent.SleepStop.class, ServerPlayerEntity.class,
+                (ScriptEvent.SleepStop event) -> event.player());
+        EventValues.register(ScriptEvent.SleepStop.class, ServerWorld.class,
+                (ScriptEvent.SleepStop event) -> event.world());
+        EventValues.register(ScriptEvent.SleepStop.class, BlockRef.class,
+                (ScriptEvent.SleepStop event) -> new BlockRef(event.world(), event.pos()));
+        entityValues(ScriptEvent.WorldChange.class, ScriptEvent.WorldChange::entity, ScriptEvent.WorldChange::world);
+        entityValues(ScriptEvent.EntityLoad.class, ScriptEvent.EntityLoad::entity, ScriptEvent.EntityLoad::world);
+        entityValues(ScriptEvent.EntityUnload.class, ScriptEvent.EntityUnload::entity, ScriptEvent.EntityUnload::world);
+    }
+
+    private static <E extends ScriptEvent> void itemValues(Class<E> type,
+            Function<E, ItemStack> item, Function<E, ? extends Entity> entity) {
+        entityValues(type, entity, event -> (ServerWorld) entity.apply(event).getWorld());
+        EventValues.register(type, LivingEntity.class, event -> entity.apply(event) instanceof LivingEntity living
+                ? living : null);
+        EventValues.register(type, ItemType.class, event -> ItemType.of(item.apply(event).getItem(), 1));
+        EventValues.register(type, ItemStack.class, item::apply);
+    }
+
+    private static <E extends ScriptEvent> void entityValues(Class<E> type,
+            Function<E, ? extends Entity> entity, Function<E, ServerWorld> world) {
+        EventValues.register(type, Entity.class, entity::apply);
+        EventValues.register(type, ServerWorld.class, world::apply);
+        EventValues.register(type, ServerPlayerEntity.class,
+                event -> entity.apply(event) instanceof ServerPlayerEntity player ? player : null);
+    }
+
+	private static void consumption() {
+		EventValues.register(ScriptEvent.ItemConsume.class, ServerPlayerEntity.class,
+				(ScriptEvent.ItemConsume event) -> event.player());
+		EventValues.register(ScriptEvent.ItemConsume.class, ItemType.class,
+				(ScriptEvent.ItemConsume event) -> ItemType.of(event.item().getItem(), 1));
+		EventValues.register(ScriptEvent.ItemConsume.class, ItemStack.class,
+				(ScriptEvent.ItemConsume event) -> event.item());
+		EventValues.register(ScriptEvent.ItemConsume.class, ServerWorld.class,
+				(ScriptEvent.ItemConsume event) -> (ServerWorld) event.player().getWorld());
 	}
 
 	private static void playerEvents() {

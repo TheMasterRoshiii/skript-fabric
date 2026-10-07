@@ -33,7 +33,6 @@ import org.jetbrains.annotations.Nullable;
 
 import dev.me.master.skript.events.EventHandler;
 import dev.me.master.skript.registrations.EventRegistry;
-import net.minecraft.server.network.ServerPlayerEntity;
 public final class ScriptLoader {
 
 	private static final Pattern FUNCTION_DECL = Pattern.compile(
@@ -59,6 +58,18 @@ public final class ScriptLoader {
 	}
 
 	public boolean load(SkriptScript script, List<String> lines) {
+		this.state.setSource(lines);
+		try {
+			return loadContents(script, lines);
+		} catch (RuntimeException e) {
+			this.state.sink.error("Could not parse script: " + e);
+			SkriptLogger.error("Script loader failed for " + script.file(), e);
+			rollback(script);
+			return false;
+		}
+	}
+
+	private boolean loadContents(SkriptScript script, List<String> lines) {
 		List<ScriptReader.Node> nodes = ScriptReader.read(lines, state);
 		primeOptions(nodes);
 		nodes = ScriptReader.substituteOptions(nodes, state);
@@ -66,14 +77,15 @@ public final class ScriptLoader {
 		while (index < nodes.size()) {
 			ScriptReader.Line line = (ScriptReader.Line) nodes.get(index);
 			if (line.indent() != 0) {
-				error(line, "Unexpected indentation at top level");
+				error(line, "Unexpected indentation; top-level declarations must start without indentation");
 				index++;
 				continue;
 			}
 			int consumed = parseRootStructure(script, line, nodes, index);
 			if (consumed < 0) {
-				error(line, "Can't understand this structure: '" + line.content() + "'");
-				index++;
+				error(line, "Unknown declaration; expected 'on <event>:', 'every <timespan>:', "
+						+ "'command /<name>:', 'function <name>(...) [:: <type>]:', 'options:' or 'variables:'");
+				index += 1 + collectChildren(nodes, index).size();
 			} else {
 				index += consumed;
 			}
@@ -98,6 +110,8 @@ public final class ScriptLoader {
 	}
 
 	private int parseRootStructure(SkriptScript script, ScriptReader.Line line, List<ScriptReader.Node> nodes, int index) {
+		this.state.uncancellableEvent = null;
+		this.state.setLine(line.number(), line.content());
 		String content = line.content();
 		List<ScriptReader.Line> children = collectChildren(nodes, index);
 
@@ -117,8 +131,8 @@ public final class ScriptLoader {
 			Trigger trigger = buildEventTrigger(script, line, eventMatcher.group(1), children);
 			if (trigger != null) {
 				script.addTrigger(trigger);
-				return 1 + children.size();
 			}
+			return 1 + children.size();
 		}
 
 		Matcher periodicMatcher = PERIODIC_DECL.matcher(content);
@@ -126,8 +140,8 @@ public final class ScriptLoader {
 			Trigger trigger = buildPeriodicTrigger(script, line, periodicMatcher.group(1), children);
 			if (trigger != null) {
 				script.addTrigger(trigger);
-				return 1 + children.size();
 			}
+			return 1 + children.size();
 		}
 
 		Matcher commandMatcher = COMMAND_DECL.matcher(content);
@@ -137,13 +151,13 @@ public final class ScriptLoader {
 				for (ScriptCommand existing : script.commands()) {
 					if (existing.name().equals(command.name())) {
 						error(line, "Duplicate command: /" + command.name());
-						return -1;
+						return 1 + children.size();
 					}
 				}
 				script.addCommand(command);
 				return 1 + children.size();
 			}
-			return -1;
+			return 1 + children.size();
 		}
 
 		Matcher functionMatcher = FUNCTION_DECL.matcher(content);
@@ -153,20 +167,21 @@ public final class ScriptLoader {
 				for (FunctionDefinition declared : script.functions()) {
 					if (declared.name().equals(function.name())) {
 						error(line, "Duplicate function: " + function.name());
-						return -1;
+						return 1 + children.size();
 					}
 				}
 				FunctionDefinition existing = FunctionRegistry.get(function.name());
 				if (existing != null && !existing.script().file().equals(script.file())) {
-					error(line, "Duplicate function: " + function.name());
-					return -1;
+					error(line, "Duplicate function: " + function.name() + "; already declared in "
+							+ existing.script().file().toAbsolutePath().normalize());
+					return 1 + children.size();
 				}
 				FunctionDefinition previous = FunctionRegistry.register(function);
 				registeredFunctions.add(new RegisteredFunction(function, previous));
 				script.addFunction(function);
 				return 1 + children.size();
 			}
-			return -1;
+			return 1 + children.size();
 		}
 		return -1;
 	}
@@ -179,10 +194,11 @@ public final class ScriptLoader {
 	}
 
 	private void registerInitialVariable(ScriptReader.Line line) {
+		this.state.setLine(line.number(), line.content());
 		String content = line.content();
 		int colon = content.indexOf(':');
 		if (colon <= 0 || !content.startsWith("{")) {
-			error(line, "Invalid variable entry");
+			error(line, "Invalid variable entry; expected '{name}: <value>'");
 			return;
 		}
 		String name = content.substring(1, content.lastIndexOf('}') > 0 ? content.lastIndexOf('}') : colon).trim();
@@ -191,7 +207,9 @@ public final class ScriptLoader {
 		if (!valueSource.isEmpty()) {
 			Expression<?> parsed = parser.parseExpression(valueSource, Object.class, false);
 			if (parsed == null) {
-				error(line, "Can't parse initial variable value: '" + valueSource + "'");
+				if (!this.state.hasLineError()) {
+					this.state.reportFailure("Invalid initial variable value; expected a supported expression");
+				}
 				return;
 			}
 			value = parsed.getValue(new ExecContext(null));
@@ -220,9 +238,12 @@ public final class ScriptLoader {
 		EventHandler handler =
 				EventRegistry.match(eventName, parser);
 		if (handler == null) {
-			error(line, "Can't understand this event: '" + eventName + "'");
+			if (!state.hasLineError()) {
+				error(line, eventName, "Unsupported event '" + eventName + "'; expected a registered event after 'on '");
+			}
 			return null;
 		}
+		this.state.uncancellableEvent = handler.canCancel() ? null : "on " + eventName;
 		List<TriggerItem> body = parseBody(childLines);
 		if (body == null)
 			return null;
@@ -233,9 +254,11 @@ public final class ScriptLoader {
 
 	private @Nullable Trigger buildPeriodicTrigger(SkriptScript script, ScriptReader.Line line,
 			String periodSource, List<ScriptReader.Line> childLines) {
+		this.state.uncancellableEvent = "every " + periodSource;
 		Expression<?> periodExpression = parser.parseLiteral(periodSource, Object.class);
 		if (!(periodExpression instanceof TimeSpanLiteral period)) {
-			error(line, "Can't understand this timespan: '" + periodSource + "'");
+			error(line, periodSource, "Invalid timespan '" + periodSource
+					+ "'; expected a duration such as '20 ticks' or '1 second'");
 			return null;
 		}
 		List<TriggerItem> body = parseBody(childLines);
@@ -248,6 +271,7 @@ public final class ScriptLoader {
 
 	private @Nullable ScriptCommand buildCommand(SkriptScript script, ScriptReader.Line headerLine,
 			String name, String argumentSpec, List<ScriptReader.Line> childLines) {
+		this.state.uncancellableEvent = "command /" + name;
 		ScriptCommand.Builder builder = ScriptCommand.builder(name);
 		boolean optionalSeen = false;
 		Set<String> argumentNames = new HashSet<>();
@@ -255,23 +279,28 @@ public final class ScriptLoader {
 		for (String rawArgument : normalizedArguments.isEmpty() ? new String[0] : normalizedArguments.split("\\s+")) {
 			if (rawArgument.isBlank())
 				continue;
+			int errorsBefore = this.state.errorCount();
 			ScriptCommand.Arg argument = parseCommandArgument(rawArgument);
 			if (argument == null) {
-				error(headerLine, "Can't understand this argument: '" + rawArgument + "'");
+				if (this.state.errorCount() == errorsBefore) {
+					error(headerLine, rawArgument,
+							"Invalid command argument; expected '<name:type>' or '[name:type]' with a non-empty name");
+				}
 				return null;
 			}
 			if (optionalSeen && !argument.optional()) {
-				error(headerLine, "Required command arguments cannot follow an optional argument");
+				error(headerLine, rawArgument, "Required command arguments cannot follow an optional argument");
 				return null;
 			}
 			if (!argumentNames.add(argument.name())) {
-				error(headerLine, "Duplicate command argument: '" + argument.name() + "'");
+				error(headerLine, rawArgument, "Duplicate command argument: '" + argument.name() + "'");
 				return null;
 			}
 			optionalSeen |= argument.optional();
 			builder.addArgument(argument);
 		}
 		List<TriggerItem> triggerBody = null;
+		boolean triggerSeen = false;
 		int i = 0;
 		while (i < childLines.size()) {
 			ScriptReader.Line entry = childLines.get(i);
@@ -283,7 +312,11 @@ public final class ScriptLoader {
 			}
 			String content = entry.content();
 			if (content.equalsIgnoreCase("trigger:")) {
+				triggerSeen = true;
 				triggerBody = parseBody(nested);
+				if (triggerBody == null) {
+					return null;
+				}
 			} else if (content.regionMatches(true, 0, "description:", 0, "description:".length())) {
 				builder.description(valueAfterColon(content));
 			} else if (content.regionMatches(true, 0, "usage:", 0, "usage:".length())) {
@@ -299,8 +332,8 @@ public final class ScriptLoader {
 			}
 			i += 1 + nested.size();
 		}
-		if (triggerBody == null) {
-			error(headerLine, "Command '" + name + "' has no trigger section");
+		if (!triggerSeen) {
+			error(headerLine, "Command '" + name + "' is missing 'trigger:'; add an indented trigger section");
 			return null;
 		}
 		Trigger trigger = new Trigger(script, "command /" + name, headerLine.number(), triggerBody);
@@ -328,25 +361,12 @@ public final class ScriptLoader {
 		if (argName.isBlank())
 			return null;
 		ClassInfo<?> type = Classes.byName(typeName);
-		if (type == null)
-			type = guessTypeFromName(argName);
-		if (type == null)
+		if (type == null) {
+			this.state.errorAt(raw, "Unknown command argument type '" + typeName
+					+ "'; expected a registered type such as 'string', 'number' or 'player'");
 			return null;
-		return new ScriptCommand.Arg(argName.toLowerCase(Locale.ROOT), type, optional);
-	}
-
-	private @Nullable ClassInfo<?> guessTypeFromName(String argName) {
-		String lowered = argName.toLowerCase(Locale.ROOT);
-		if (lowered.contains("player")) {
-			ClassInfo<?> playerType = Classes.byClass(ServerPlayerEntity.class);
-			if (playerType != null)
-				return playerType;
 		}
-		if (lowered.contains("number") || lowered.contains("amount") || lowered.contains("count"))
-			return Classes.byName("number");
-		if (lowered.contains("text") || lowered.contains("message"))
-			return Classes.byClass(String.class);
-		return Classes.byClass(String.class);
+		return new ScriptCommand.Arg(argName.toLowerCase(Locale.ROOT), type, optional);
 	}
 
 	private @Nullable FunctionDefinition buildFunction(SkriptScript script, ScriptReader.Line line,
@@ -368,7 +388,7 @@ public final class ScriptLoader {
 				String defaultValueSource = optional ? part.substring(part.indexOf('=') + 1).trim() : null;
 				int separator = typeAndName.indexOf(':');
 				if (separator <= 0) {
-					error(line, "Parameter needs a type: '" + part + "'");
+					error(line, part, "Function parameter needs a type; expected 'name: type [= default]'");
 					return null;
 				}
 				String parameterName = typeAndName.substring(0, separator).trim().toLowerCase(Locale.ROOT);
@@ -383,14 +403,17 @@ public final class ScriptLoader {
 				optionalSeen |= optional;
 				ClassInfo<?> type = Classes.byName(typeAndName.substring(separator + 1).trim());
 				if (type == null) {
-					error(line, "Unknown parameter type: '" + typeAndName + "'");
+					error(line, typeAndName.substring(separator + 1).trim(),
+							"Unknown function parameter type; expected a registered type such as 'string' or 'number'");
 					return null;
 				}
 				Expression<?> defaultValue = null;
 				if (defaultValueSource != null) {
 					defaultValue = parser.parseExpression(defaultValueSource, type.type(), false);
 					if (defaultValue == null) {
-						error(line, "Can't parse default value: '" + defaultValueSource + "'");
+						if (!this.state.hasLineError()) {
+							this.state.reportFailure("Invalid default value; expected " + type.name() + " expression");
+						}
 						return null;
 					}
 				}
@@ -402,7 +425,8 @@ public final class ScriptLoader {
 		if (returnTypeSource != null && !returnTypeSource.isBlank()) {
 			returnType = Classes.byName(returnTypeSource.trim());
 			if (returnType == null) {
-				error(line, "Unknown return type: '" + returnTypeSource + "'");
+				error(line, returnTypeSource, "Unknown return type '" + returnTypeSource
+						+ "'; expected a registered type such as 'string' or 'number'");
 				return null;
 			}
 		}
@@ -417,9 +441,14 @@ public final class ScriptLoader {
 		int i = 0;
 		while (i < lines.size()) {
 			ScriptReader.Line line = lines.get(i);
+			int errorsBefore = this.state.errorCount();
 			int consumed = parseStatementInto(items, line, lines, i);
 			if (consumed < 0) {
-				error(line, "Can't understand this line: '" + line.content() + "'");
+				if (this.state.errorCount() == errorsBefore) {
+					this.state.setLine(line.number(), line.content());
+					this.state.reportFailure("Unknown effect or section; check the keyword and arguments, "
+							+ "and end section headers with ':'");
+				}
 				return null;
 			}
 			i += consumed;
@@ -429,6 +458,7 @@ public final class ScriptLoader {
 
 	private int parseStatementInto(List<TriggerItem> items, ScriptReader.Line line,
 			List<ScriptReader.Line> siblings, int index) {
+		this.state.setLine(line.number(), line.content());
 		String content = line.content();
 
 		if (content.equalsIgnoreCase("else:")) {
@@ -528,7 +558,10 @@ public final class ScriptLoader {
 	}
 
 	private int errorReturn(ScriptReader.Line line, String message) {
-		error(line, message);
+		this.state.setLine(line.number(), line.content());
+		if (!this.state.hasLineError()) {
+			this.state.reportFailure(message);
+		}
 		return -1;
 	}
 
@@ -559,9 +592,13 @@ public final class ScriptLoader {
 				continue;
 			try {
 				Condition built = entry.factory().create(parser, entry.pattern(), match);
-				if (built != null)
+				if (built != null) {
+					this.state.clearFailure();
 					return built;
+				}
+				this.state.expectSyntax(entry.pattern().source());
 			} catch (RuntimeException e) {
+				this.state.sink.error("Error building condition: " + e);
 				SkriptLogger.error("Error building condition from '" + source + "'", e);
 				return null;
 			}
@@ -577,9 +614,13 @@ public final class ScriptLoader {
 			try {
 				TriggerItem.Statement built =
 						entry.factory().create(lineNumber, parser, entry.pattern(), match);
-				if (built != null)
+				if (built != null) {
+					this.state.clearFailure();
 					return built;
+				}
+				this.state.expectSyntax(entry.pattern().source());
 			} catch (RuntimeException e) {
+				this.state.sink.error("Error building effect: " + e);
 				SkriptLogger.error("Error building effect from '" + source + "'", e);
 				return null;
 			}
@@ -588,6 +629,12 @@ public final class ScriptLoader {
 	}
 
 	private void error(ScriptReader.Line line, String message) {
-		state.sink.error(state.script.name() + " line " + line.number() + ": " + message);
+		this.state.setLine(line.number(), line.content());
+		this.state.sink.error(message);
+	}
+
+	private void error(ScriptReader.Line line, String fragment, String message) {
+		this.state.setLine(line.number(), line.content());
+		this.state.errorAt(fragment, message);
 	}
 }

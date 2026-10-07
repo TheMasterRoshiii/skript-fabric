@@ -52,6 +52,13 @@ public final class DefaultConditions {
 	}
 
 	private static void registerPredicates() {
+        SyntaxRegistry.registerCondition(7,
+                new String[] {"(op|operator)", "%players% (is|are) [an] (op|operator)"},
+                (parser, pattern, match) -> operatorCondition(parser, match, true));
+        SyntaxRegistry.registerCondition(7,
+                new String[] {"not (op|operator)",
+                        "%players% (isn't|is not|aren't|are not) [an] (op|operator)"},
+                (parser, pattern, match) -> operatorCondition(parser, match, false));
 		SyntaxRegistry.registerCondition(6,
 				new String[] {"%objects% contains %objects%"},
 				(parser, pattern, match) -> {
@@ -119,6 +126,17 @@ public final class DefaultConditions {
 	private interface PlayerPredicate {
 		boolean test(ServerPlayerEntity player);
 	}
+
+    private static @Nullable Condition operatorCondition(Parser parser, SkriptPattern.MatchResult match,
+                                                         boolean operator) {
+        String source = match.slotInputs().length == 0 ? "player" : match.slotInputs()[0];
+        Expression<?> players = parser.parseExpression(source, ServerPlayerEntity.class, true);
+        if (players == null) {
+            return null;
+        }
+        return context -> allPlayers(players.getObjectValues(context), player ->
+                player.getServerWorld().getServer().getPlayerManager().isOperator(player.getGameProfile()) == operator);
+    }
 
 	private static boolean hasCustomPermission(ServerPlayerEntity player, String permission) {
 		String tag = "skript.perm." + permission.toLowerCase(Locale.ROOT).replace(' ', '.');

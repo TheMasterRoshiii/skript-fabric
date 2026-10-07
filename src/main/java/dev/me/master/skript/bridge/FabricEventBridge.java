@@ -1,6 +1,8 @@
 package dev.me.master.skript.bridge;
 import dev.me.master.skript.events.EventDispatch;
 import dev.me.master.skript.events.ScriptEvent;
+import net.fabricmc.fabric.api.entity.event.v1.EntitySleepEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityWorldChangeEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
@@ -8,12 +10,15 @@ import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.text.Text;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.ActionResult;
+import net.minecraft.util.TypedActionResult;
 import net.minecraft.util.math.BlockPos;
 
 public final class FabricEventBridge {
@@ -26,7 +31,67 @@ public final class FabricEventBridge {
 		messages();
 		combat();
 		interaction();
+        items();
+        entities();
+        sleeping();
 	}
+
+    private static void items() {
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            if (!(player instanceof ServerPlayerEntity serverPlayer) || !(world instanceof ServerWorld)
+                    || !EventDispatch.hasListeners(ScriptEvent.ItemUse.class)) {
+                return TypedActionResult.pass(ItemStack.EMPTY);
+            }
+            ItemStack held = player.getStackInHand(hand);
+            ScriptEvent.ItemUse event = new ScriptEvent.ItemUse(serverPlayer, held.copyWithCount(1), hand);
+            return EventDispatch.fire(event).isCancelled()
+                    ? TypedActionResult.fail(held) : TypedActionResult.pass(ItemStack.EMPTY);
+        });
+    }
+
+    private static void entities() {
+        ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+            if (EventDispatch.hasListeners(ScriptEvent.EntityLoad.class)) {
+                EventDispatch.fire(new ScriptEvent.EntityLoad(entity, world));
+            }
+        });
+        ServerEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
+            if (EventDispatch.hasListeners(ScriptEvent.EntityUnload.class)) {
+                EventDispatch.fire(new ScriptEvent.EntityUnload(entity, world));
+            }
+        });
+        ServerEntityEvents.EQUIPMENT_CHANGE.register((entity, slot, previous, current) -> {
+            if (EventDispatch.hasListeners(ScriptEvent.EquipmentChange.class)) {
+                EventDispatch.fire(new ScriptEvent.EquipmentChange(
+                        entity, slot, previous.copy(), current.copy()));
+            }
+        });
+        ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD.register((player, origin, destination) -> {
+            if (EventDispatch.hasListeners(ScriptEvent.WorldChange.class)) {
+                EventDispatch.fire(new ScriptEvent.WorldChange(player, origin, destination));
+            }
+        });
+        ServerEntityWorldChangeEvents.AFTER_ENTITY_CHANGE_WORLD.register((original, entity, origin, destination) -> {
+            if (EventDispatch.hasListeners(ScriptEvent.WorldChange.class)) {
+                EventDispatch.fire(new ScriptEvent.WorldChange(entity, origin, destination));
+            }
+        });
+    }
+
+    private static void sleeping() {
+        EntitySleepEvents.START_SLEEPING.register((entity, pos) -> {
+            if (entity instanceof ServerPlayerEntity player && entity.getWorld() instanceof ServerWorld world
+                    && EventDispatch.hasListeners(ScriptEvent.SleepStart.class)) {
+                EventDispatch.fire(new ScriptEvent.SleepStart(player, pos.toImmutable(), world));
+            }
+        });
+        EntitySleepEvents.STOP_SLEEPING.register((entity, pos) -> {
+            if (entity instanceof ServerPlayerEntity player && entity.getWorld() instanceof ServerWorld world
+                    && EventDispatch.hasListeners(ScriptEvent.SleepStop.class)) {
+                EventDispatch.fire(new ScriptEvent.SleepStop(player, pos.toImmutable(), world));
+            }
+        });
+    }
 
 	private static void connections() {
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {

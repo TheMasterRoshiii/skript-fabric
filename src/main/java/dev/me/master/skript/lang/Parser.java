@@ -9,6 +9,7 @@ import org.jetbrains.annotations.Nullable;
 public final class Parser {
 
 	public final ParseState state;
+	private int expressionDepth;
 
 	public Parser(ParseState state) {
 		this.state = state;
@@ -16,14 +17,23 @@ public final class Parser {
 
 	public @Nullable Expression<?> parseExpression(String source, Class<?> expected, boolean allowList) {
 		String trimmed = source.trim();
-		if (trimmed.isEmpty())
-			return null;
-		if (allowList) {
-			List<Expression<?>> elements = parseList(trimmed, expected);
-			if (elements != null)
-				return new ListExpression(elements);
+		this.expressionDepth++;
+		try {
+			Expression<?> result = null;
+			if (!trimmed.isEmpty()) {
+				List<Expression<?>> elements = allowList ? this.parseList(trimmed, expected) : null;
+				result = elements == null ? this.parseSingle(trimmed, expected) : new ListExpression(elements);
+			}
+			if (result == null) {
+				this.state.rememberFailure(trimmed,
+						"Cannot parse '" + trimmed + "'; expected a valid " + typeName(expected) + " expression");
+			} else if (this.expressionDepth == 1) {
+				this.state.clearFailure();
+			}
+			return result;
+		} finally {
+			this.expressionDepth--;
 		}
-		return parseSingle(trimmed, expected);
 	}
 
 	private @Nullable List<Expression<?>> parseList(String source, Class<?> expected) {
@@ -32,7 +42,7 @@ public final class Parser {
 			return null;
 		List<Expression<?>> parsed = new ArrayList<>(chunks.size());
 		for (String chunk : chunks) {
-			Expression<?> element = parseSingle(chunk, expected);
+			Expression<?> element = this.parseExpression(chunk, expected, false);
 			if (element == null)
 				return null;
 			parsed.add(element);
@@ -44,28 +54,29 @@ public final class Parser {
 		String trimmed = source.trim();
 		if (trimmed.length() >= 2 && ((trimmed.startsWith("\"") && trimmed.endsWith("\""))
 				|| (trimmed.startsWith("'") && trimmed.endsWith("'"))))
-			return acceptExpected(new Literal<>(unescape(trimmed.substring(1, trimmed.length() - 1)), String.class), expected);
+			return this.acceptExpected(
+					new Literal<>(unescape(trimmed.substring(1, trimmed.length() - 1)), String.class), expected, trimmed);
 		Expression<?> variable = tryParseVariable(trimmed);
 		if (variable != null)
-			return acceptExpected(variable, expected);
+			return this.acceptExpected(variable, expected, trimmed);
 		Expression<?> functionCall = FunctionRegistry.tryParseCall(trimmed, this);
 		if (functionCall != null)
-			return acceptExpected(functionCall, expected);
+			return this.acceptExpected(functionCall, expected, trimmed);
 		if (containsTopLevelOperator(trimmed)) {
 			Expression<?> arithmetic = ArithmeticExpression.ArithmeticParser.tryParse(this, trimmed);
 			if (arithmetic != null)
-				return acceptExpected(arithmetic, expected);
+				return this.acceptExpected(arithmetic, expected, trimmed);
 		}
 		for (SyntaxRegistry.ExpressionEntry entry : SyntaxRegistry.expressions()) {
 			SkriptPattern.MatchResult match = entry.pattern().match(trimmed);
 			if (match == null)
 				continue;
 			Expression<?> built = entry.factory().create(this, entry.pattern(), match);
-			Expression<?> accepted = acceptExpected(built, expected);
+			Expression<?> accepted = this.acceptExpected(built, expected, trimmed);
 			if (accepted != null)
 				return accepted;
 		}
-		return acceptExpected(parseLiteral(trimmed, expected), expected);
+		return this.acceptExpected(parseLiteral(trimmed, expected), expected, trimmed);
 	}
 
 	public VariableExpression parseVariable(String source) {
@@ -122,10 +133,22 @@ public final class Parser {
 		return null;
 	}
 
-	private static @Nullable Expression<?> acceptExpected(@Nullable Expression<?> expression, Class<?> expected) {
-		if (expression == null || expected == Object.class || expression.returnType() == Object.class)
+	private @Nullable Expression<?> acceptExpected(
+			@Nullable Expression<?> expression, Class<?> expected, String source) {
+		if (expression == null || expected == Object.class || expression.returnType() == Object.class) {
 			return expression;
-		return expected.isAssignableFrom(expression.returnType()) ? expression : null;
+		}
+		if (expected.isAssignableFrom(expression.returnType())) {
+			return expression;
+		}
+		this.state.rememberFailure(source, "Expected " + typeName(expected) + " expression, but '" + source
+				+ "' produces " + typeName(expression.returnType()));
+		return null;
+	}
+
+	private static String typeName(Class<?> type) {
+		ClassInfo<?> info = Classes.byClass(type);
+		return info == null ? "value" : info.name();
 	}
 
 	@SuppressWarnings("unchecked")

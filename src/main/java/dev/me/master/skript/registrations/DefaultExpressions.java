@@ -1,4 +1,5 @@
 package dev.me.master.skript.registrations;
+import dev.me.master.skript.events.ScriptEvent;
 import dev.me.master.skript.lang.Classes;
 import dev.me.master.skript.lang.EventExpression;
 import dev.me.master.skript.lang.EventValues;
@@ -42,7 +43,7 @@ public final class DefaultExpressions {
 	}
 
 	private static void event() {
-		SyntaxRegistry.registerExpression(10, "[the] player[s]", (parser, pattern, match) ->
+		SyntaxRegistry.registerExpression(10, "player[s]|the player[s]", (parser, pattern, match) ->
 				new EventExpression<>(ServerPlayerEntity.class));
 		SyntaxRegistry.registerExpression(10, "attacker", (parser, pattern, match) ->
 				new EventExpression<>(Entity.class));
@@ -54,10 +55,44 @@ public final class DefaultExpressions {
 				new EventExpression<>(Number.class));
 		SyntaxRegistry.registerExpression(9, "[the] (full |whole )?command", (parser, pattern, match) ->
 				new EventExpression<>(String.class));
-		SyntaxRegistry.registerExpression(9, "[the] event[-]block|clicked block|broken block|placed block",
+		SyntaxRegistry.registerExpression(9, "event[-]block|the event[-]block|clicked block|broken block|placed block|bed",
 				(parser, pattern, match) -> new EventExpression<>(BlockRef.class));
-		SyntaxRegistry.registerExpression(8, "[the] world", (parser, pattern, match) ->
+		SyntaxRegistry.registerExpression(9,
+                "event[-]item|the event[-]item|consumed item|the consumed item|used item|the used item|totem",
+				(parser, pattern, match) -> new EventExpression<>(ItemType.class));
+		SyntaxRegistry.registerExpression(9,
+				"(name of|the name of) (event[-]item|the event[-]item|consumed item|the consumed item|used item|totem)",
+				(parser, pattern, match) -> new SingleExpression<String>(String.class) {
+					@Override
+					protected @Nullable String compute(ExecContext context) {
+						if (!context.hasEvent()) {
+							return null;
+						}
+						ItemStack item = EventValues.get(context.event(), ItemStack.class);
+						return item == null ? null : item.getName().getString();
+					}
+				});
+		SyntaxRegistry.registerExpression(8, "world|the world", (parser, pattern, match) ->
 				new EventExpression<>(ServerWorld.class));
+        SyntaxRegistry.registerExpression(9, "event[-]entity|the event[-]entity", (parser, pattern, match) ->
+                new EventExpression<>(Entity.class));
+        SyntaxRegistry.registerExpression(9, "equipment slot|the equipment slot", (parser, pattern, match) ->
+                new EventExpression<>(String.class));
+        SyntaxRegistry.registerExpression(9, "previous world|the previous world", (parser, pattern, match) ->
+                new SingleExpression<ServerWorld>(ServerWorld.class) {
+                    @Override
+                    protected @Nullable ServerWorld compute(ExecContext context) {
+                        return context.event() instanceof ScriptEvent.WorldChange event ? event.previousWorld() : null;
+                    }
+                });
+        SyntaxRegistry.registerExpression(9, "previous item|the previous item", (parser, pattern, match) ->
+                new SingleExpression<ItemType>(ItemType.class) {
+                    @Override
+                    protected @Nullable ItemType compute(ExecContext context) {
+                        return context.event() instanceof ScriptEvent.EquipmentChange event
+                                ? ItemType.of(event.previousItem().getItem(), 1) : null;
+                    }
+                });
 
 		SyntaxRegistry.registerExpression(7, "all [of the] players", (parser, pattern, match) ->
 				new MultiExpression<ServerPlayerEntity>(ServerPlayerEntity.class) {

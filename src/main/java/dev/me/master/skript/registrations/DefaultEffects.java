@@ -818,13 +818,30 @@ public final class DefaultEffects {
 				(line, parser, pattern, match) -> new FlowEffect(Flow.EXIT_SECTION));
 		SyntaxRegistry.registerEffect(12,
 				new String[] {"cancel [the] event"},
-				(line, parser, pattern, match) -> new TriggerItem.Statement(line) {
+				(line, parser, pattern, match) -> {
+                    if (parser.state.uncancellableEvent != null) {
+                        parser.state.errorAt("cancel", "Cannot cancel '" + parser.state.uncancellableEvent
+                                + "': this trigger does not offer cancellation; remove 'cancel event'");
+                        return null;
+                    }
+                    String location = parser.state.script.file() + ":" + parser.state.lineNumber();
+                    return new TriggerItem.Statement(line) {
 					@Override
 					protected Flow execute(ExecContext context) {
+                            if (!context.canCancel()) {
+                                if (context.event() != null && context.event().canCancel()) {
+                                    throw new IllegalStateException(location
+                                            + ": Cannot cancel after this event has completed; "
+                                            + "move 'cancel event' before 'wait'");
+                                }
+                                throw new IllegalStateException(location
+                                        + ": Cannot cancel this event: it does not offer cancellation");
+                            }
 						context.cancel();
 						return Flow.NORMAL;
 					}
-				});
+                    };
+                });
 		SyntaxRegistry.registerEffect(12,
 				new String[] {"return %objects%"},
 				(line, parser, pattern, match) -> {

@@ -14,7 +14,6 @@ public final class EventValues {
 	}
 
 	private static final Map<Key, Extractor<?, ?>> EXTRACTORS = new HashMap<>();
-	private static final Map<Class<?>, List<Class<?>>> SUPERTYPE_CACHE = new HashMap<>();
 
 	@FunctionalInterface
 	public interface Extractor<E extends ScriptEvent, T> {
@@ -26,7 +25,6 @@ public final class EventValues {
 
 	public static <E extends ScriptEvent, T> void register(Class<E> eventClass, Class<T> type, Extractor<E, T> extractor) {
 		EXTRACTORS.put(new Key(eventClass, type), extractor);
-		SUPERTYPE_CACHE.clear();
 	}
 
 	public static boolean supports(Class<? extends ScriptEvent> eventClass, Class<?> type) {
@@ -35,19 +33,11 @@ public final class EventValues {
 
 	@SuppressWarnings("unchecked")
 	public static <T> @Nullable T get(@Nullable ScriptEvent event, Class<T> type) {
-		if (event == null)
+		if (event == null) {
 			return null;
-		for (Class<?> current = event.getClass(); current != null && current != Object.class; current = current.getSuperclass()) {
-			Extractor<ScriptEvent, T> extractor = (Extractor<ScriptEvent, T>) find(current.asSubclass(ScriptEvent.class), type);
-			if (extractor == null)
-				continue;
-			try {
-				return extractor.extract(event);
-			} catch (ClassCastException e) {
-				return null;
-			}
 		}
-		return null;
+		Extractor<ScriptEvent, T> extractor = (Extractor<ScriptEvent, T>) find(event.getClass(), type);
+		return extractor == null ? null : extractor.extract(event);
 	}
 
 	private static Extractor<?, ?> find(Class<? extends ScriptEvent> eventClass, Class<?> type) {

@@ -2,11 +2,14 @@
   "required": true,
   "minVersion": "0.8",
   "package": "dev.me.master.skript.mixin",
+  "plugin": "dev.me.master.skript.mixin.SkriptMixinPlugin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "CommandManagerMixin",
     "CommandNodeAccessMixin",
-    "ServerPlayerInteractionManagerMixin"
+    "ServerPlayerInteractionManagerMixin",
+    "itemconsume.ServerPlayerEntityMixin",
+    "totempop.LivingEntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -14,6 +14,7 @@ public final class ExecContext {
 	private final Map<String, Object> locals;
 	private final List<LoopState> loopStack = new ArrayList<>();
 	private boolean cancelled;
+    private boolean cancellationClosed;
 	private @Nullable Object returnValue;
 	private boolean returned;
 
@@ -65,6 +66,14 @@ public final class ExecContext {
 	public void cancel() {
 		cancelled = true;
 	}
+
+    public boolean canCancel() {
+        return !this.cancellationClosed && this.event != null && this.event.canCancel();
+    }
+
+    public void closeCancellation() {
+        this.cancellationClosed = true;
+    }
 
 	public void setReturnValue(@Nullable Object value) {
 		this.returnValue = value;

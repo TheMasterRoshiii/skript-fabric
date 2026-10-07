@@ -6,4 +6,8 @@ import dev.me.master.skript.lang.Trigger;
 public interface EventHandler {
 
 	void bind(Trigger trigger);
+
+    default boolean canCancel() {
+        return true;
+    }
 }

@@ -3,9 +3,11 @@ package dev.me.master.skript.events;
 import dev.me.master.skript.script.SkriptScript;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.item.ItemStack;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.Hand;
@@ -16,6 +18,17 @@ public sealed interface ScriptEvent permits
 		ScriptEvent.PlayerJoin,
 		ScriptEvent.PlayerQuit,
 		ScriptEvent.Chat,
+		ScriptEvent.ItemConsume,
+		ScriptEvent.ItemUse,
+		ScriptEvent.TotemPop,
+		ScriptEvent.EquipmentChange,
+		ScriptEvent.SleepStart,
+		ScriptEvent.SleepStop,
+		ScriptEvent.WorldChange,
+		ScriptEvent.EntityLoad,
+		ScriptEvent.EntityUnload,
+		ScriptEvent.ServerStart,
+		ScriptEvent.ServerStop,
 		ScriptEvent.Damage,
 		ScriptEvent.Death,
 		ScriptEvent.BlockBreak,
@@ -29,6 +42,17 @@ public sealed interface ScriptEvent permits
 		ScriptEvent.Periodic,
 		ScriptEvent.ScriptLoad {
 
+    default boolean canCancel() {
+        return canCancel(this.getClass());
+    }
+
+    static boolean canCancel(Class<? extends ScriptEvent> type) {
+        return type == Chat.class || type == ItemConsume.class || type == ItemUse.class
+                || type == Damage.class || type == BlockBreak.class
+                || type == RightClickBlock.class || type == LeftClickBlock.class
+                || type == RightClickEntity.class || type == LeftClickEntity.class || type == Command.class;
+    }
+
 	record PlayerJoin(ServerPlayerEntity player) implements ScriptEvent {
 	}
 
@@ -37,6 +61,40 @@ public sealed interface ScriptEvent permits
 
 	record Chat(ServerPlayerEntity player, String message) implements ScriptEvent {
 	}
+
+	record ItemConsume(ServerPlayerEntity player, ItemStack item, Hand hand) implements ScriptEvent {
+	}
+
+    record ItemUse(ServerPlayerEntity player, ItemStack item, Hand hand) implements ScriptEvent {
+    }
+
+    record TotemPop(LivingEntity entity, ItemStack item, DamageSource source) implements ScriptEvent {
+    }
+
+    record EquipmentChange(LivingEntity entity, EquipmentSlot slot, ItemStack previousItem, ItemStack item)
+            implements ScriptEvent {
+    }
+
+    record SleepStart(ServerPlayerEntity player, BlockPos pos, ServerWorld world) implements ScriptEvent {
+    }
+
+    record SleepStop(ServerPlayerEntity player, BlockPos pos, ServerWorld world) implements ScriptEvent {
+    }
+
+    record WorldChange(Entity entity, ServerWorld previousWorld, ServerWorld world) implements ScriptEvent {
+    }
+
+    record EntityLoad(Entity entity, ServerWorld world) implements ScriptEvent {
+    }
+
+    record EntityUnload(Entity entity, ServerWorld world) implements ScriptEvent {
+    }
+
+    record ServerStart(MinecraftServer server) implements ScriptEvent {
+    }
+
+    record ServerStop(MinecraftServer server) implements ScriptEvent {
+    }
 
 	record Damage(LivingEntity victim, DamageSource source, float amount) implements ScriptEvent {
 	}
